@@ -1,0 +1,600 @@
+{
+  "ml_accuracy": 0.75,
+  "old_accuracy": 0.36428571428571427,
+  "improvement": 0.38571428571428573,
+  "ml_results": [
+    {
+      "id": "henri_confirmation",
+      "system": "ML",
+      "predictions": {
+        "hostEarningsEur": 389.13,
+        "guestTotalEur": 462.84,
+        "cleaningFeeEur": 100.002,
+        "guestName": "Henri Conradsen"
+      },
+      "ground_truth": {
+        "hostEarningsEur": 389.13,
+        "guestName": "Henri Conradsen",
+        "guestTotalEur": 462.84,
+        "cleaningFeeEur": 100.0,
+        "nights": 2
+      },
+      "field_accuracy": {
+        "hostEarningsEur": {
+          "expected": 389.13,
+          "predicted": 389.13,
+          "correct": true
+        },
+        "guestName": {
+          "expected": "Henri Conradsen",
+          "predicted": "Henri Conradsen",
+          "correct": true
+        },
+        "guestTotalEur": {
+          "expected": 462.84,
+          "predicted": 462.84,
+          "correct": true
+        },
+        "cleaningFeeEur": {
+          "expected": 100.0,
+          "predicted": 100.002,
+          "correct": true
+        },
+        "nights": {
+          "expected": 2,
+          "predicted": null,
+          "correct": false
+        }
+      },
+      "total_fields": 5,
+      "correct_fields": 4,
+      "accuracy": 0.8
+    },
+    {
+      "id": "henri_payout",
+      "system": "ML",
+      "predictions": {
+        "hostEarningsSek": 4494.8
+      },
+      "ground_truth": {
+        "hostEarningsSek": 4494.8,
+        "hostEarningsEur": null
+      },
+      "field_accuracy": {
+        "hostEarningsSek": {
+          "expected": 4494.8,
+          "predicted": 4494.8,
+          "correct": true
+        },
+        "hostEarningsEur": {
+          "expected": null,
+          "predicted": null,
+          "correct": true
+        }
+      },
+      "total_fields": 2,
+      "correct_fields": 2,
+      "accuracy": 1.0
+    },
+    {
+      "id": "ambiguous_amounts",
+      "system": "ML",
+      "predictions": {
+        "hostEarningsEur": 245.6,
+        "cleaningFeeEur": 75.0,
+        "guestName": "Anna Svensson"
+      },
+      "ground_truth": {
+        "hostEarningsEur": 350.25,
+        "guestName": "Anna Svensson",
+        "guestTotalEur": 380.4,
+        "cleaningFeeEur": 75.0
+      },
+      "field_accuracy": {
+        "hostEarningsEur": {
+          "expected": 350.25,
+          "predicted": 245.6,
+          "correct": false
+        },
+        "guestName": {
+          "expected": "Anna Svensson",
+          "predicted": "Anna Svensson",
+          "correct": true
+        },
+        "guestTotalEur": {
+          "expected": 380.4,
+          "predicted": null,
+          "correct": false
+        },
+        "cleaningFeeEur": {
+          "expected": 75.0,
+          "predicted": 75.0,
+          "correct": true
+        }
+      },
+      "total_fields": 4,
+      "correct_fields": 2,
+      "accuracy": 0.5
+    },
+    {
+      "id": "english_confirmation",
+      "system": "ML",
+      "predictions": {
+        "guestTotalEur": 320.75,
+        "cleaningFeeEur": 45.0,
+        "guestName": "John Smith"
+      },
+      "ground_truth": {
+        "hostEarningsEur": 195.5,
+        "guestName": "John Smith",
+        "guestTotalEur": 320.75,
+        "cleaningFeeEur": 45.0
+      },
+      "field_accuracy": {
+        "hostEarningsEur": {
+          "expected": 195.5,
+          "predicted": null,
+          "correct": false
+        },
+        "guestName": {
+          "expected": "John Smith",
+          "predicted": "John Smith",
+          "correct": true
+        },
+        "guestTotalEur": {
+          "expected": 320.75,
+          "predicted": 320.75,
+          "correct": true
+        },
+        "cleaningFeeEur": {
+          "expected": 45.0,
+          "predicted": 45.0,
+          "correct": true
+        }
+      },
+      "total_fields": 4,
+      "correct_fields": 3,
+      "accuracy": 0.75
+    },
+    {
+      "id": "swedish_reminder",
+      "system": "ML",
+      "predictions": {
+        "hostEarningsEur": 180.25,
+        "guestName": "Maria"
+      },
+      "ground_truth": {
+        "hostEarningsEur": 180.25,
+        "guestName": "Maria"
+      },
+      "field_accuracy": {
+        "hostEarningsEur": {
+          "expected": 180.25,
+          "predicted": 180.25,
+          "correct": true
+        },
+        "guestName": {
+          "expected": "Maria",
+          "predicted": "Maria",
+          "correct": true
+        }
+      },
+      "total_fields": 2,
+      "correct_fields": 2,
+      "accuracy": 1.0
+    },
+    {
+      "id": "sek_payout_only",
+      "system": "ML",
+      "predictions": {
+        "hostEarningsSek": 2850.9
+      },
+      "ground_truth": {
+        "hostEarningsSek": 2850.9,
+        "hostEarningsEur": null
+      },
+      "field_accuracy": {
+        "hostEarningsSek": {
+          "expected": 2850.9,
+          "predicted": 2850.9,
+          "correct": true
+        },
+        "hostEarningsEur": {
+          "expected": null,
+          "predicted": null,
+          "correct": true
+        }
+      },
+      "total_fields": 2,
+      "correct_fields": 2,
+      "accuracy": 1.0
+    },
+    {
+      "id": "complex_confirmation",
+      "system": "ML",
+      "predictions": {
+        "cleaningFeeEur": 485.0,
+        "guestName": "Lisa Andersson"
+      },
+      "ground_truth": {
+        "hostEarningsEur": 385.0,
+        "guestName": "Lisa Andersson",
+        "guestTotalEur": 485.0,
+        "cleaningFeeEur": 50.0,
+        "nights": 3
+      },
+      "field_accuracy": {
+        "hostEarningsEur": {
+          "expected": 385.0,
+          "predicted": null,
+          "correct": false
+        },
+        "guestName": {
+          "expected": "Lisa Andersson",
+          "predicted": "Lisa Andersson",
+          "correct": true
+        },
+        "guestTotalEur": {
+          "expected": 485.0,
+          "predicted": null,
+          "correct": false
+        },
+        "cleaningFeeEur": {
+          "expected": 50.0,
+          "predicted": 485.0,
+          "correct": false
+        },
+        "nights": {
+          "expected": 3,
+          "predicted": null,
+          "correct": false
+        }
+      },
+      "total_fields": 5,
+      "correct_fields": 1,
+      "accuracy": 0.2
+    }
+  ],
+  "old_results": [
+    {
+      "id": "henri_confirmation",
+      "system": "Old",
+      "predictions": {
+        "emailType": "booking_confirmation",
+        "bookingCode": "HMSPX39W44",
+        "guestName": null,
+        "amount": null,
+        "currency": null,
+        "checkInDate": null,
+        "checkOutDate": null,
+        "nights": 2,
+        "guestTotalEur": 389.13,
+        "hostEarningsEur": 128.5,
+        "cleaningFeeEur": 100.002,
+        "nightlyRateEur": null,
+        "serviceFeeEur": null,
+        "propertyTaxEur": null,
+        "guestCount": null
+      },
+      "ground_truth": {
+        "hostEarningsEur": 389.13,
+        "guestName": "Henri Conradsen",
+        "guestTotalEur": 462.84,
+        "cleaningFeeEur": 100.0,
+        "nights": 2
+      },
+      "field_accuracy": {
+        "hostEarningsEur": {
+          "expected": 389.13,
+          "predicted": 128.5,
+          "correct": false
+        },
+        "guestName": {
+          "expected": "Henri Conradsen",
+          "predicted": null,
+          "correct": false
+        },
+        "guestTotalEur": {
+          "expected": 462.84,
+          "predicted": 389.13,
+          "correct": false
+        },
+        "cleaningFeeEur": {
+          "expected": 100.0,
+          "predicted": 100.002,
+          "correct": true
+        },
+        "nights": {
+          "expected": 2,
+          "predicted": 2,
+          "correct": true
+        }
+      },
+      "total_fields": 5,
+      "correct_fields": 2,
+      "accuracy": 0.4
+    },
+    {
+      "id": "henri_payout",
+      "system": "Old",
+      "predictions": {
+        "emailType": "payout",
+        "bookingCode": "HMSPX39W44",
+        "guestName": null,
+        "amount": 4494.8,
+        "currency": "SEK",
+        "checkInDate": null,
+        "checkOutDate": null,
+        "nights": null,
+        "guestTotalEur": null,
+        "hostEarningsEur": null,
+        "cleaningFeeEur": null,
+        "nightlyRateEur": null,
+        "serviceFeeEur": null,
+        "propertyTaxEur": null,
+        "guestCount": null
+      },
+      "ground_truth": {
+        "hostEarningsSek": 4494.8,
+        "hostEarningsEur": null
+      },
+      "field_accuracy": {
+        "hostEarningsSek": {
+          "expected": 4494.8,
+          "predicted": null,
+          "correct": false
+        },
+        "hostEarningsEur": {
+          "expected": null,
+          "predicted": null,
+          "correct": true
+        }
+      },
+      "total_fields": 2,
+      "correct_fields": 1,
+      "accuracy": 0.5
+    },
+    {
+      "id": "ambiguous_amounts",
+      "system": "Old",
+      "predictions": {
+        "emailType": "booking_confirmation",
+        "bookingCode": null,
+        "guestName": null,
+        "amount": null,
+        "currency": null,
+        "checkInDate": null,
+        "checkOutDate": null,
+        "nights": null,
+        "guestTotalEur": 350.25,
+        "hostEarningsEur": 245.6,
+        "cleaningFeeEur": 75.0,
+        "nightlyRateEur": null,
+        "serviceFeeEur": null,
+        "propertyTaxEur": null,
+        "guestCount": null
+      },
+      "ground_truth": {
+        "hostEarningsEur": 350.25,
+        "guestName": "Anna Svensson",
+        "guestTotalEur": 380.4,
+        "cleaningFeeEur": 75.0
+      },
+      "field_accuracy": {
+        "hostEarningsEur": {
+          "expected": 350.25,
+          "predicted": 245.6,
+          "correct": false
+        },
+        "guestName": {
+          "expected": "Anna Svensson",
+          "predicted": null,
+          "correct": false
+        },
+        "guestTotalEur": {
+          "expected": 380.4,
+          "predicted": 350.25,
+          "correct": false
+        },
+        "cleaningFeeEur": {
+          "expected": 75.0,
+          "predicted": 75.0,
+          "correct": true
+        }
+      },
+      "total_fields": 4,
+      "correct_fields": 1,
+      "accuracy": 0.25
+    },
+    {
+      "id": "english_confirmation",
+      "system": "Old",
+      "predictions": {
+        "emailType": "booking_confirmation",
+        "bookingCode": "HM123456789",
+        "guestName": null,
+        "amount": null,
+        "currency": null,
+        "checkInDate": null,
+        "checkOutDate": null,
+        "nights": null,
+        "guestTotalEur": 320.0,
+        "hostEarningsEur": 195.5,
+        "cleaningFeeEur": 45.0,
+        "nightlyRateEur": null,
+        "serviceFeeEur": null,
+        "propertyTaxEur": null,
+        "guestCount": null
+      },
+      "ground_truth": {
+        "hostEarningsEur": 195.5,
+        "guestName": "John Smith",
+        "guestTotalEur": 320.75,
+        "cleaningFeeEur": 45.0
+      },
+      "field_accuracy": {
+        "hostEarningsEur": {
+          "expected": 195.5,
+          "predicted": 195.5,
+          "correct": true
+        },
+        "guestName": {
+          "expected": "John Smith",
+          "predicted": null,
+          "correct": false
+        },
+        "guestTotalEur": {
+          "expected": 320.75,
+          "predicted": 320.0,
+          "correct": false
+        },
+        "cleaningFeeEur": {
+          "expected": 45.0,
+          "predicted": 45.0,
+          "correct": true
+        }
+      },
+      "total_fields": 4,
+      "correct_fields": 2,
+      "accuracy": 0.5
+    },
+    {
+      "id": "swedish_reminder",
+      "system": "Old",
+      "predictions": {
+        "emailType": "booking_reminder",
+        "bookingCode": null,
+        "guestName": null,
+        "amount": null,
+        "currency": null,
+        "checkInDate": null,
+        "checkOutDate": null,
+        "nights": null,
+        "guestTotalEur": null,
+        "hostEarningsEur": null,
+        "cleaningFeeEur": null,
+        "nightlyRateEur": null,
+        "serviceFeeEur": null,
+        "propertyTaxEur": null,
+        "guestCount": null
+      },
+      "ground_truth": {
+        "hostEarningsEur": 180.25,
+        "guestName": "Maria"
+      },
+      "field_accuracy": {
+        "hostEarningsEur": {
+          "expected": 180.25,
+          "predicted": null,
+          "correct": false
+        },
+        "guestName": {
+          "expected": "Maria",
+          "predicted": null,
+          "correct": false
+        }
+      },
+      "total_fields": 2,
+      "correct_fields": 0,
+      "accuracy": 0.0
+    },
+    {
+      "id": "sek_payout_only",
+      "system": "Old",
+      "predictions": {
+        "emailType": "payout",
+        "bookingCode": null,
+        "guestName": null,
+        "amount": 2850.9,
+        "currency": "SEK",
+        "checkInDate": null,
+        "checkOutDate": null,
+        "nights": null,
+        "guestTotalEur": null,
+        "hostEarningsEur": null,
+        "cleaningFeeEur": null,
+        "nightlyRateEur": null,
+        "serviceFeeEur": null,
+        "propertyTaxEur": null,
+        "guestCount": null
+      },
+      "ground_truth": {
+        "hostEarningsSek": 2850.9,
+        "hostEarningsEur": null
+      },
+      "field_accuracy": {
+        "hostEarningsSek": {
+          "expected": 2850.9,
+          "predicted": null,
+          "correct": false
+        },
+        "hostEarningsEur": {
+          "expected": null,
+          "predicted": null,
+          "correct": true
+        }
+      },
+      "total_fields": 2,
+      "correct_fields": 1,
+      "accuracy": 0.5
+    },
+    {
+      "id": "complex_confirmation",
+      "system": "Old",
+      "predictions": {
+        "emailType": "booking_confirmation",
+        "bookingCode": null,
+        "guestName": null,
+        "amount": null,
+        "currency": null,
+        "checkInDate": null,
+        "checkOutDate": null,
+        "nights": 3,
+        "guestTotalEur": 385.0,
+        "hostEarningsEur": 310.0,
+        "cleaningFeeEur": 50.0,
+        "nightlyRateEur": 120.0,
+        "serviceFeeEur": 25.0,
+        "propertyTaxEur": null,
+        "guestCount": null
+      },
+      "ground_truth": {
+        "hostEarningsEur": 385.0,
+        "guestName": "Lisa Andersson",
+        "guestTotalEur": 485.0,
+        "cleaningFeeEur": 50.0,
+        "nights": 3
+      },
+      "field_accuracy": {
+        "hostEarningsEur": {
+          "expected": 385.0,
+          "predicted": 310.0,
+          "correct": false
+        },
+        "guestName": {
+          "expected": "Lisa Andersson",
+          "predicted": null,
+          "correct": false
+        },
+        "guestTotalEur": {
+          "expected": 485.0,
+          "predicted": 385.0,
+          "correct": false
+        },
+        "cleaningFeeEur": {
+          "expected": 50.0,
+          "predicted": 50.0,
+          "correct": true
+        },
+        "nights": {
+          "expected": 3,
+          "predicted": 3,
+          "correct": true
+        }
+      },
+      "total_fields": 5,
+      "correct_fields": 2,
+      "accuracy": 0.4
+    }
+  ]
+}

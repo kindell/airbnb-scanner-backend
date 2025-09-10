@@ -1,0 +1,83 @@
+{
+  "test_cases": [
+    {
+      "name": "HMFH9A8E35_matthias_reminder",
+      "description": "Matthias booking reminder - should extract booking code and guest name",
+      "gmailId": "198fb420715324ac",
+      "expected": {
+        "bookingCode": "HMFH9A8E35",
+        "guestName": "Matthias",
+        "emailType": "booking_reminder",
+        "checkInDate": null,
+        "checkOutDate": null,
+        "hostEarningsEur": null
+      }
+    },
+    {
+      "name": "HMXQHZHRAW_dorothee_confirmation",
+      "description": "Dorothée booking confirmation - same date problem to fix",
+      "gmailId": "198f78bbd1f1d56b",
+      "expected": {
+        "bookingCode": "HMXQHZHRAW",
+        "guestName": "Dorothée Pelissou",
+        "emailType": "booking_confirmation", 
+        "checkInDate": "2025-10-22",
+        "checkOutDate": "2025-10-26",
+        "hostEarningsEur": 722.67
+      },
+      "knownIssue": "Currently returns same checkInDate and checkOutDate"
+    },
+    {
+      "name": "HMFWZYKPXY_lisa_confirmation",
+      "description": "Lisa booking confirmation - another same date case",
+      "gmailId": "198acf71d43f2c8f",
+      "expected": {
+        "bookingCode": "HMFWZYKPXY", 
+        "guestName": "Lisa GrÜTzenbach",
+        "emailType": "booking_confirmation",
+        "checkInDate": "2025-09-23",
+        "checkOutDate": "2025-09-27",
+        "hostEarningsEur": 785.89
+      },
+      "knownIssue": "Currently returns same checkInDate and checkOutDate"
+    },
+    {
+      "name": "HMF4MBHP35_cecilia_confirmation", 
+      "description": "Cecilia booking confirmation - missing checkout date",
+      "gmailId": "19897bdd45c23d25",
+      "expected": {
+        "bookingCode": "HMF4MBHP35",
+        "guestName": "Cecilia Bejdén", 
+        "emailType": "booking_confirmation",
+        "checkInDate": "2026-07-13",
+        "checkOutDate": "2026-07-27",
+        "hostEarningsEur": 3542.5
+      },
+      "knownIssue": "Currently returns null checkOutDate"
+    },
+    {
+      "name": "HMBETK4KBD_michael_reminder",
+      "description": "Michael booking reminder - basic test case",
+      "gmailId": "19884a906e36b9f7", 
+      "expected": {
+        "bookingCode": "HMBETK4KBD",
+        "guestName": "Michael",
+        "emailType": "booking_reminder",
+        "checkInDate": null,
+        "checkOutDate": null,
+        "hostEarningsEur": null
+      }
+    }
+  ],
+  "validation_rules": {
+    "required_fields": ["bookingCode", "guestName", "emailType"],
+    "date_format": "YYYY-MM-DD",
+    "amount_format": "number",
+    "booking_code_pattern": "^HM[A-Z0-9]{8}$"
+  },
+  "test_config": {
+    "timeout_ms": 30000,
+    "retry_count": 2,
+    "log_level": "detailed"
+  }
+}

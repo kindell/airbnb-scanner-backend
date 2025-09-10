@@ -1,0 +1,58 @@
+[
+  {
+    "subject": "En utbetalning på 4 612,87 kr skickades",
+    "from": "Airbnb <automated@airbnb.com>",
+    "body": "Hej! Vi har skickat en utbetalning till dig. €368,60 + €45,60 = 4 612,87 kr. Din utbetalning kommer att synas på ditt konto inom 1-2 arbetsdagar.",
+    "expected_output": {
+      "emailType": "payout",
+      "bookingCode": "HMWAWTBYX9",
+      "hostEarningsEur": 368.60,
+      "cleaningFeeEur": 45.60,
+      "totalEur": 414.20,
+      "payoutSek": 4612.87,
+      "exchangeRate": 11.1385
+    }
+  },
+  {
+    "subject": "En utbetalning på 2 475,08 kr skickades",  
+    "from": "Airbnb <automated@airbnb.com>",
+    "body": "Hej! Vi har skickat en utbetalning till dig. €211,94 = 2 475,08 kr. Din utbetalning kommer att synas på ditt konto inom 1-2 arbetsdagar.",
+    "expected_output": {
+      "emailType": "payout",
+      "bookingCode": "HMNF2A5ZJE", 
+      "hostEarningsEur": 211.94,
+      "cleaningFeeEur": 0,
+      "totalEur": 211.94,
+      "payoutSek": 2475.08,
+      "exchangeRate": 11.6785
+    }
+  },
+  {
+    "subject": "En utbetalning på 20 479,38 kr skickades",
+    "from": "Airbnb <automated@airbnb.com>",
+    "body": "Hej! Vi har skickat en utbetalning till dig. €1799,26 + €62,00 = 20 479,38 kr. Din utbetalning kommer att synas på ditt konto inom 1-2 arbetsdagar.",
+    "expected_output": {
+      "emailType": "payout",
+      "bookingCode": "HM2MB59FSM",
+      "hostEarningsEur": 1799.26,
+      "cleaningFeeEur": 62.00,
+      "totalEur": 1861.26,
+      "payoutSek": 20479.38,
+      "exchangeRate": 11.0015
+    }
+  },
+  {
+    "subject": "A 27 528,94 kr payout was sent",
+    "from": "Airbnb <automated@airbnb.com>",
+    "body": "Hi! We've sent a payout to you. €2394,73 = 27 528,94 kr. Your payout will appear in your account within 1-2 business days.",
+    "expected_output": {
+      "emailType": "payout", 
+      "bookingCode": "HMWTJ35QQ4",
+      "hostEarningsEur": 2394.73,
+      "cleaningFeeEur": 0,
+      "totalEur": 2394.73,
+      "payoutSek": 27528.94,
+      "exchangeRate": 11.498
+    }
+  }
+]
