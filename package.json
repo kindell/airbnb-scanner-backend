@@ -4,7 +4,7 @@
   "description": "Backend API for Airbnb Gmail scanner with multi-tenant support",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "prisma generate && tsc",
     "dev": "nodemon --exec ts-node src/index.ts",
     "start": "node dist/index.js",
     "db:generate": "prisma generate",
