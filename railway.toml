@@ -1,0 +1,6 @@
+[build]
+builder = "dockerfile"
+dockerfile = "Dockerfile"
+
+[deploy]
+startCommand = "sh -c 'npx prisma db push && node dist/index.js'"
