@@ -17,8 +17,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install Node.js dependencies
-RUN npm ci --only=production
+# Install all dependencies (including dev dependencies for TypeScript)
+RUN npm ci
 
 # Copy Python ML files
 COPY ml/ ./ml/
@@ -34,6 +34,9 @@ RUN npx prisma generate
 
 # Build TypeScript
 RUN npm run build
+
+# Remove dev dependencies to reduce image size
+RUN npm prune --production
 
 # Expose port
 EXPOSE 3000
