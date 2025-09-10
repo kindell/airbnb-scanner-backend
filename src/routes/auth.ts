@@ -9,18 +9,19 @@ const router = express.Router();
  * GET /auth/google
  * Initiate Google OAuth flow
  */
-router.get('/google', (req, res, next) => {
-  // Force consent and offline access for refresh tokens
-  req.query.access_type = 'offline';
-  req.query.prompt = 'consent';
+router.get('/google', (req, res) => {
+  // Build Google OAuth URL with proper parameters for refresh tokens
+  const params = new URLSearchParams({
+    client_id: process.env.GOOGLE_CLIENT_ID!,
+    redirect_uri: process.env.GOOGLE_CALLBACK_URL!,
+    response_type: 'code',
+    scope: 'profile email https://www.googleapis.com/auth/gmail.readonly',
+    access_type: 'offline',
+    prompt: 'consent'
+  });
   
-  passport.authenticate('google', { 
-    scope: [
-      'profile', 
-      'email',
-      'https://www.googleapis.com/auth/gmail.readonly'
-    ]
-  })(req, res, next);
+  const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  res.redirect(googleAuthUrl);
 });
 
 /**
