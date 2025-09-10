@@ -9,9 +9,10 @@ export function configurePassport() {
   passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID!,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-    callbackURL: process.env.GOOGLE_CALLBACK_URL!
+    callbackURL: process.env.GOOGLE_CALLBACK_URL!,
+    scope: ['profile', 'email', 'https://www.googleapis.com/auth/gmail.readonly']
   },
-  async (accessToken, refreshToken, profile, done) => {
+  async (accessToken: string, refreshToken: string, profile: any, done: any) => {
     try {
       console.log(`🔑 OAuth tokens received for ${profile.emails?.[0]?.value}`);
       console.log(`📧 Access token: ${accessToken ? 'Present' : 'Missing'}`);

@@ -9,15 +9,19 @@ const router = express.Router();
  * GET /auth/google
  * Initiate Google OAuth flow
  */
-router.get('/google',
+router.get('/google', (req, res, next) => {
+  // Force consent and offline access for refresh tokens
+  req.query.access_type = 'offline';
+  req.query.prompt = 'consent';
+  
   passport.authenticate('google', { 
     scope: [
       'profile', 
       'email',
       'https://www.googleapis.com/auth/gmail.readonly'
     ]
-  })
-);
+  })(req, res, next);
+});
 
 /**
  * GET /auth/google/callback
@@ -29,7 +33,7 @@ router.get('/google/callback',
     const user = req.user as User;
     
     if (!user) {
-      return res.redirect('http://localhost:5173/setup?error=auth_failed');
+      return res.redirect(`${process.env.FRONTEND_URL}/setup?error=auth_failed`);
     }
 
     console.log(`🔧 About to generate JWT for user:`, user.email);
@@ -42,7 +46,7 @@ router.get('/google/callback',
     console.log(`✅ User authenticated: ${user.email}`);
     
     // Redirect directly to React app with JWT token as URL parameter
-    const redirectUrl = `http://localhost:5173/dashboard?token=${encodeURIComponent(token)}`;
+    const redirectUrl = `${process.env.FRONTEND_URL}/dashboard?token=${encodeURIComponent(token)}`;
     console.log(`🔄 Redirecting to:`, redirectUrl.substring(0, 100) + '...');
     res.redirect(redirectUrl);
     
