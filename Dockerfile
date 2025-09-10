@@ -24,7 +24,7 @@ RUN npm ci
 COPY ml/ ./ml/
 
 # Install Python dependencies if requirements.txt exists
-RUN if [ -f ml/requirements.txt ]; then pip3 install -r ml/requirements.txt; fi
+RUN if [ -f ml/requirements.txt ]; then pip3 install --break-system-packages -r ml/requirements.txt; fi
 
 # Copy application code
 COPY . .
