@@ -7,3 +7,4 @@ dist/
 *.log
 ml/__pycache__/
 *.pyc
+*.pkl

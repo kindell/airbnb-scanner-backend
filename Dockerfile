@@ -26,6 +26,11 @@ COPY ml/ ./ml/
 # Install Python dependencies if requirements.txt exists
 RUN if [ -f ml/requirements.txt ]; then pip3 install -r ml/requirements.txt; fi
 
+# Train ML models if training data exists
+RUN cd ml && \
+    if [ -f train_classifier.py ]; then python3 train_classifier.py; fi && \
+    if [ -f train_ml_extractor.py ]; then python3 train_ml_extractor.py; fi
+
 # Copy application code
 COPY . .
 
