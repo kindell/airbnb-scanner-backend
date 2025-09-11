@@ -1139,11 +1139,12 @@ router.post('/stop-scanning', async (req: any, res: any) => {
     console.log(`🛑 Cancelled ${cancelledSessions.count} scanning sessions for user ${userId}`);
     
     res.json({ 
-      success: true, 
-      sessionsCancelled: cancelledSessions.count,
-      message: cancelledSessions.count > 0 ? 
-        `Scanning stoppad (${cancelledSessions.count} sessioner avbrutna)` : 
-        'Ingen aktiv scanning att stoppa' 
+      data: {
+        cancelled: cancelledSessions.count,
+        message: cancelledSessions.count > 0 ? 
+          `Scanning stoppad (${cancelledSessions.count} sessioner avbrutna)` : 
+          'Ingen aktiv scanning att stoppa' 
+      }
     });
     
   } catch (error) {
