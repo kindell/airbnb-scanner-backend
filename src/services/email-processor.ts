@@ -93,6 +93,17 @@ export class EmailProcessor {
       const emailId = emailIds[i];
       
       try {
+        // Check if scanning has been stopped by user
+        const session = await this.prisma.scanningSession.findUnique({
+          where: { id: this.sessionId },
+          select: { status: true }
+        });
+        
+        if (session?.status === 'cancelled') {
+          console.log(`🛑 Scanning stopped by user (session ${this.sessionId})`);
+          break;
+        }
+        
         const progress = {
           current: processed + skipped + errors,
           total: emailIds.length,
