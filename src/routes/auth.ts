@@ -11,7 +11,7 @@ const router = express.Router();
  */
 router.get('/google', (req, res) => {
   // Capture the origin from the referer (frontend that initiated the OAuth)
-  const frontendOrigin = req.get('Referer')?.match(/^https?:\/\/[^\/]+/)?.[0] || process.env.FRONTEND_URL;
+  const frontendOrigin = req.get('Referer')?.match(/^https?:\/\/[^\/]+/)?.[0] || process.env.FRONTEND_URL || 'http://localhost:3001';
   
   // Build Google OAuth URL with proper parameters for refresh tokens
   const params = new URLSearchParams({
@@ -38,7 +38,7 @@ router.get('/google/callback',
     const user = req.user as User;
     
     // Get the original frontend origin from state parameter
-    const origin = req.query.state ? decodeURIComponent(req.query.state as string) : process.env.FRONTEND_URL;
+    const origin = req.query.state ? decodeURIComponent(req.query.state as string) : process.env.FRONTEND_URL || 'http://localhost:3001';
     
     if (!user) {
       return res.redirect(`${origin}/?error=auth_failed`);
