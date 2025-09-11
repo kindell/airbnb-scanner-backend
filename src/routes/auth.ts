@@ -10,6 +10,9 @@ const router = express.Router();
  * Initiate Google OAuth flow
  */
 router.get('/google', (req, res) => {
+  // Capture the origin from the referer (frontend that initiated the OAuth)
+  const frontendOrigin = req.get('Referer')?.match(/^https?:\/\/[^\/]+/)?.[0] || process.env.FRONTEND_URL;
+  
   // Build Google OAuth URL with proper parameters for refresh tokens
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID!,
@@ -17,7 +20,8 @@ router.get('/google', (req, res) => {
     response_type: 'code',
     scope: 'profile email https://www.googleapis.com/auth/gmail.readonly',
     access_type: 'offline',
-    prompt: 'consent'
+    prompt: 'consent',
+    state: encodeURIComponent(frontendOrigin) // Store origin in state parameter
   });
   
   const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
@@ -33,9 +37,10 @@ router.get('/google/callback',
   (req, res) => {
     const user = req.user as User;
     
+    // Get the original frontend origin from state parameter
+    const origin = req.query.state ? decodeURIComponent(req.query.state as string) : process.env.FRONTEND_URL;
+    
     if (!user) {
-      // Try to get origin from referer or session, fallback to env var
-      const origin = req.get('Referer')?.match(/^https?:\/\/[^\/]+/)?.[0] || process.env.FRONTEND_URL;
       return res.redirect(`${origin}/?error=auth_failed`);
     }
 
@@ -48,8 +53,6 @@ router.get('/google/callback',
     
     console.log(`✅ User authenticated: ${user.email}`);
     
-    // Use referer to determine origin, fallback to env var
-    const origin = req.get('Referer')?.match(/^https?:\/\/[^\/]+/)?.[0] || process.env.FRONTEND_URL;
     const redirectUrl = `${origin}/?token=${encodeURIComponent(token)}`;
     console.log(`🔄 Redirecting to:`, redirectUrl.substring(0, 100) + '...');
     res.redirect(redirectUrl);
