@@ -34,7 +34,9 @@ router.get('/google/callback',
     const user = req.user as User;
     
     if (!user) {
-      return res.redirect(`${process.env.FRONTEND_URL}/setup?error=auth_failed`);
+      // Try to get origin from referer or session, fallback to env var
+      const origin = req.get('Referer')?.match(/^https?:\/\/[^\/]+/)?.[0] || process.env.FRONTEND_URL;
+      return res.redirect(`${origin}/?error=auth_failed`);
     }
 
     console.log(`🔧 About to generate JWT for user:`, user.email);
@@ -46,8 +48,9 @@ router.get('/google/callback',
     
     console.log(`✅ User authenticated: ${user.email}`);
     
-    // Redirect directly to React app with JWT token as URL parameter
-    const redirectUrl = `${process.env.FRONTEND_URL}/dashboard?token=${encodeURIComponent(token)}`;
+    // Use referer to determine origin, fallback to env var
+    const origin = req.get('Referer')?.match(/^https?:\/\/[^\/]+/)?.[0] || process.env.FRONTEND_URL;
+    const redirectUrl = `${origin}/?token=${encodeURIComponent(token)}`;
     console.log(`🔄 Redirecting to:`, redirectUrl.substring(0, 100) + '...');
     res.redirect(redirectUrl);
     
