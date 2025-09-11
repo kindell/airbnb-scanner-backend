@@ -39,7 +39,11 @@ app.use(cors({
   origin: [
     process.env.FRONTEND_URL || 'http://localhost:3000',
     'http://localhost:5174', // React dev server
-    'http://localhost:5173'  // Alternative Vite port
+    'http://localhost:5173', // Alternative Vite port
+    'https://5aa8b54b-27af-421e-a302-e96cfccc075f.sandbox.lovable.dev', // Lovable sandbox
+    'https://airbnb-scanner.sandbox.lovable.dev', // Lovable sandbox (custom domain)
+    'https://airbnb-scanner.preview.lovable.dev', // Lovable preview
+    'https://airbnb-scanner.lovable.app' // Lovable production
   ],
   credentials: true
 }));
