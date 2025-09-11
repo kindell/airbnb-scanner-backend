@@ -188,6 +188,107 @@ export class GmailClient {
   }
 
   /**
+   * Comprehensive search for all Airbnb-related emails that might contain booking codes
+   * Combines multiple search strategies to catch the maximum number of relevant emails
+   */
+  async searchAirbnbEmailsComprehensive(year?: number): Promise<{
+    totalEmails: string[];
+    searchResults: Array<{
+      strategy: string;
+      query: string;
+      emailIds: string[];
+      count: number;
+    }>;
+  }> {
+    const allEmailIds = new Set<string>();
+    const searchResults: Array<{
+      strategy: string;
+      query: string;
+      emailIds: string[];
+      count: number;
+    }> = [];
+
+    console.log(`🎯 Starting comprehensive Airbnb email search for ${year || 'all years'}...`);
+
+    // Strategy 1: Booking confirmations (original restrictive search)
+    try {
+      const confirmationEmails = await this.searchAirbnbBookingEmails(year);
+      searchResults.push({
+        strategy: 'Booking Confirmations',
+        query: 'booking/reservation confirmed subjects',
+        emailIds: confirmationEmails,
+        count: confirmationEmails.length
+      });
+      confirmationEmails.forEach(id => allEmailIds.add(id));
+      console.log(`📧 Strategy 1 - Confirmations: ${confirmationEmails.length} emails`);
+    } catch (error) {
+      console.error('❌ Strategy 1 failed:', error);
+    }
+
+    // Strategy 2: Payout emails (contains booking codes)
+    try {
+      const payoutEmails = await this.searchAirbnbPayoutEmails(year);
+      searchResults.push({
+        strategy: 'Payout Emails',
+        query: 'payout/payment related emails',
+        emailIds: payoutEmails,
+        count: payoutEmails.length
+      });
+      payoutEmails.forEach(id => allEmailIds.add(id));
+      console.log(`💰 Strategy 2 - Payouts: ${payoutEmails.length} emails`);
+    } catch (error) {
+      console.error('❌ Strategy 2 failed:', error);
+    }
+
+    // Strategy 3: Payout notifications (specific type with booking codes)
+    try {
+      const payoutNotificationEmails = await this.searchAirbnbPayoutNotificationEmails(year);
+      searchResults.push({
+        strategy: 'Payout Notifications',
+        query: 'payout notification emails with booking codes',
+        emailIds: payoutNotificationEmails,
+        count: payoutNotificationEmails.length
+      });
+      payoutNotificationEmails.forEach(id => allEmailIds.add(id));
+      console.log(`💳 Strategy 3 - Payout Notifications: ${payoutNotificationEmails.length} emails`);
+    } catch (error) {
+      console.error('❌ Strategy 3 failed:', error);
+    }
+
+    // Strategy 4: Broader Airbnb search (any Airbnb email with booking code patterns)
+    try {
+      let broadQuery = 'from:automated@airbnb.com OR from:noreply@airbnb.com OR from:express@airbnb.com';
+      if (year) {
+        broadQuery += ` after:${year}/1/1 before:${year}/12/31`;
+      }
+      
+      const broadEmails = await this.searchEmails(broadQuery, 1000);
+      searchResults.push({
+        strategy: 'Broad Airbnb Search',
+        query: broadQuery,
+        emailIds: broadEmails,
+        count: broadEmails.length
+      });
+      broadEmails.forEach(id => allEmailIds.add(id));
+      console.log(`🌐 Strategy 4 - Broad Search: ${broadEmails.length} emails`);
+    } catch (error) {
+      console.error('❌ Strategy 4 failed:', error);
+    }
+
+    const totalEmailIds = Array.from(allEmailIds);
+    
+    console.log(`🎯 Comprehensive search completed:`);
+    console.log(`   - Individual strategies found: ${searchResults.map(r => r.count).join(', ')} emails`);
+    console.log(`   - Total unique emails: ${totalEmailIds.length}`);
+    console.log(`   - Improvement over restrictive search: ${totalEmailIds.length - (searchResults[0]?.count || 0)} additional emails`);
+
+    return {
+      totalEmails: totalEmailIds,
+      searchResults
+    };
+  }
+
+  /**
    * Refresh expired tokens
    */
   private async refreshTokens(): Promise<void> {

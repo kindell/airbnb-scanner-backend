@@ -1059,6 +1059,27 @@ router.get('/scanning-status/:userId', async (req, res) => {
       });
     }
     
+    // FIXED: Also check database for active sessions (after server restart)
+    const activeSession = await prisma.scanningSession.findFirst({
+      where: { 
+        userId,
+        status: { in: ['running', 'queued'] },
+        completedAt: null
+      },
+      orderBy: { startedAt: 'desc' }
+    });
+    
+    if (activeSession) {
+      return res.json({
+        data: {
+          isActive: true,
+          progress: Math.round((activeSession.processedEmails / (activeSession.totalEmails || 1)) * 100),
+          message: activeSession.currentMessage || `📧 Bearbetar ${activeSession.year} (${activeSession.processedEmails}/${activeSession.totalEmails})`,
+          year: activeSession.year
+        }
+      });
+    }
+    
     // If not active, get most recent completed session for display
     const lastSession = await prisma.scanningSession.findFirst({
       where: { userId },
@@ -1195,7 +1216,7 @@ router.get('/stats', async (req: any, res: any) => {
 router.get('/bookings', async (req: any, res: any) => {
   try {
     const userId = req.user!.id;
-    const { year, status, limit = 50, offset = 0, includePrivate = 'false' } = req.query;
+    const { year, status, limit = 500, offset = 0, includePrivate = 'false' } = req.query;
     
     const where: any = { userId };
     
@@ -1248,7 +1269,7 @@ router.get('/bookings', async (req: any, res: any) => {
 router.get('/payouts', async (req: any, res: any) => {
   try {
     const userId = req.user!.id;
-    const { limit = 50, offset = 0 } = req.query;
+    const { limit = 500, offset = 0 } = req.query;
     
     const payouts = await prisma.payout.findMany({
       where: { userId },
@@ -1783,7 +1804,29 @@ router.post('/scan-year', async (req: any, res: any) => {
     // Start processing asynchronously 
     setImmediate(async () => {
       try {
-        await processEmailsForYear(userId, parseInt(year), sessionRecord.id, userRecord);
+        // Use EmailProcessor with enrichment support
+        const { EmailProcessor } = await import('../services/email-processor');
+        const { prisma } = await import('../database/client');
+        const processor = new EmailProcessor({
+          prisma,
+          userId,
+          user: userRecord,
+          sessionId: sessionRecord.id,
+          year: parseInt(year),
+          onProgress: (data: any) => {
+            console.log('📊 [PROGRESS] EmailProcessor progress:', data.status, data.message || data.progress);
+          },
+          onBroadcast: (userId: number, data: any) => {
+            console.log('📡 [BROADCAST] Broadcasting progress:', data.status, data.message || data.progress);
+            broadcastToStreams(userId, data);
+            if (wsManager) {
+              wsManager.broadcastScanStatus(userId, data);
+            }
+          }
+        });
+        
+        const emailIds = await processor.searchBookingEmails();
+        await processor.processEmails(emailIds);
       } catch (error: any) {
         console.error(`❌ Background processing failed for session ${sessionRecord.id}:`, error);
         // Update session as failed
@@ -1998,6 +2041,9 @@ router.post('/rescan-booking', async (req: any, res: any) => {
           console.log(`✅ Successfully parsed booking data from email ${emailId}`);
           console.log(`   Email type: ${(result as any).emailType}`);
           console.log(`   Booking code: ${result.bookingCode}`);
+          console.log(`🐛 [DATE DEBUG] Rescan API - ML parser result:`);
+          console.log(`   checkInDate: ${result.checkInDate} (type: ${typeof result.checkInDate})`);
+          console.log(`   checkOutDate: ${result.checkOutDate} (type: ${typeof result.checkOutDate})`);
           
           // Check if booking exists
           const existingBooking = await prisma.booking.findFirst({
@@ -2069,24 +2115,10 @@ router.post('/rescan-booking', async (req: any, res: any) => {
       }
     }
 
-    // If we processed any booking confirmations, try to enrich with additional emails
+    // Enrichment is now handled inline by EmailProcessor during processing
     if (processedCount > 0) {
-      try {
-        console.log(`🔍 Running enrichment for booking ${bookingCode}`);
-        const { enrichBookingWithEmails } = require('../utils/booking-enricher');
-        
-        const booking = await prisma.booking.findFirst({
-          where: { userId, bookingCode }
-        });
-        
-        if (booking) {
-          await enrichBookingWithEmails(booking, gmailClient);
-          enrichmentRun = true;
-          console.log(`✨ Enrichment completed for booking ${bookingCode}`);
-        }
-      } catch (enrichError) {
-        console.error(`❌ Enrichment error for ${bookingCode}:`, enrichError);
-      }
+      enrichmentRun = true;
+      console.log(`✨ EmailProcessor enrichment completed for booking ${bookingCode}`);
     }
 
     res.json({
@@ -2149,334 +2181,8 @@ function filterBookingData(result: any) {
  */
 async function processEmailsForYear(userId: number, year: number, sessionId: number, user: any) {
   console.log(`📧 Starting processEmailsForYear for user ${userId}, year ${year}, session ${sessionId}`);
-
-  // Mark scanning as started
-  scanningStatus.set(userId, {
-    isScanning: true,
-    year: year,
-    startTime: new Date(),
-    currentStatus: 'starting',
-    lastMessage: `🔍 Startar sökning efter Airbnb emails för hela ${year}...`,
-  });
-
-  // Broadcast initial status via WebSocket
-  if (wsManager) {
-    wsManager.broadcastScanProgress(userId, {
-      status: 'starting',
-      message: `🔍 Startar sökning efter Airbnb emails för hela ${year}...`
-    });
-  }
-
-  // Initialize Gmail client and parser
-  const gmailClient = new GmailClient(user);
-  const parser = new MLEmailParser(userId);
-
-  // Search for booking emails
-  const allEmailIds = await gmailClient.searchAirbnbBookingEmails(year);
-  
-  // Update session and scanning status with email count
-  let sessionRecord = await prisma.scanningSession.update({
-    where: { id: sessionId },
-    data: {
-      totalEmails: allEmailIds.length,
-      currentMessage: `📧 Hittade ${allEmailIds.length} booking confirmation emails för ${year}`,
-      currentStep: 'searching',
-      lastUpdateAt: new Date()
-    }
-  });
-
-  scanningStatus.set(userId, {
-    isScanning: true,
-    year: year,
-    startTime: scanningStatus.get(userId)?.startTime || new Date(),
-    currentStatus: 'searching',
-    lastMessage: `📧 Hittade ${allEmailIds.length} booking confirmation emails för ${year}`,
-    totalEmails: allEmailIds.length,
-  });
-  
-  // Broadcast search results via WebSocket
-  if (wsManager) {
-    wsManager.broadcastScanProgress(userId, {
-      status: 'searching',
-      message: `📧 Hittade ${allEmailIds.length} booking confirmation emails för ${year}`
-    });
-  }
-
-  if (allEmailIds.length === 0) {
-    // Save completed session to database
-    await prisma.scanningSession.update({
-      where: { id: sessionId },
-      data: {
-        status: 'completed',
-        totalEmails: 0,
-        processedEmails: 0,
-        skippedEmails: 0,
-        errorEmails: 0,
-        currentMessage: '✅ Inga nya emails hittades för den valda perioden.',
-        currentStep: 'completed',
-        completedAt: new Date()
-      }
-    });
-    
-    scanningStatus.delete(userId);
-    
-    // Broadcast completion via WebSocket
-    if (wsManager) {
-      wsManager.broadcastScanStatus(userId, {
-        status: 'completed',
-        message: '✅ Inga nya emails hittades för den valda perioden.',
-        processed: 0,
-        skipped: 0,
-        errors: 0
-      });
-    }
-    return;
-  }
-
-  // Update to processing step
-  scanningStatus.set(userId, {
-    isScanning: true,
-    year: year,
-    startTime: scanningStatus.get(userId)?.startTime || new Date(),
-    currentStatus: 'processing',
-    lastMessage: `⚡ Börjar bearbeta ${allEmailIds.length} emails...`,
-    totalEmails: allEmailIds.length
-  });
-  
-  // Broadcast processing start via WebSocket
-  if (wsManager) {
-    wsManager.broadcastScanProgress(userId, {
-      status: 'processing',
-      message: `⚡ Börjar bearbeta ${allEmailIds.length} emails...`,
-      total: allEmailIds.length
-    });
-  }
-
-  let processed = 0;
-  let skipped = 0;
-  let errors = 0;
-
-  // Process emails one by one
-  for (const emailId of allEmailIds) {
-    try {
-      // Check if scanning has been stopped by user
-      const currentStatus = scanningStatus.get(userId);
-      if (!currentStatus?.isScanning) {
-        console.log('🛑 Scanning stopped by user');
-        break;
-      }
-      
-      // Check if already processed
-      const existing = await prisma.booking.findFirst({
-        where: { 
-          userId: userId, 
-          gmailId: emailId 
-        }
-      });
-
-      if (existing) {
-        skipped++;
-        const progress = {
-          current: processed + skipped + errors,
-          total: allEmailIds.length,
-          processed,
-          skipped,
-          errors
-        };
-        
-        // Update scanning status
-        scanningStatus.set(userId, {
-          isScanning: true,
-          year: year,
-          startTime: scanningStatus.get(userId)?.startTime || new Date(),
-          progress
-        });
-        
-        // Broadcast progress via WebSocket
-        if (wsManager) {
-          wsManager.broadcastScanProgress(userId, {
-            status: 'progress',
-            message: `⏭️  Hoppade över redan bearbetad email (${processed + skipped + errors}/${allEmailIds.length})`,
-            progress
-          });
-        }
-        continue;
-      }
-
-      // Get email content
-      const email = await gmailClient.getEmail(emailId);
-      
-      // Extract text content (similar to streaming endpoint)
-      const extractText = (payload: any): string => {
-        const extractFromPart = (part: any): string => {
-          let content = '';
-          
-          if (part.body?.data) {
-            try {
-              const decoded = Buffer.from(part.body.data, 'base64').toString('utf-8');
-              console.log(`[DEBUG] Part ${part.mimeType || 'unknown'}: ${decoded.length} chars`);
-              content += decoded + '\n';
-            } catch (e) {
-              console.log(`[DEBUG] Failed to decode part ${part.mimeType}: ${e}`);
-            }
-          }
-          
-          if (part.parts) {
-            for (const subPart of part.parts) {
-              content += extractFromPart(subPart);
-            }
-          }
-          
-          return content;
-        };
-        
-        return extractFromPart(payload);
-      };
-
-      const emailContent = extractText(email.payload);
-      
-      // Parse with ML parser
-      const emailData = {
-        emailId: emailId,
-        rawEmailContent: emailContent,
-        gmailId: emailId,
-        gmailThreadId: email.threadId || ''
-      };
-      const result = await parser.parseBookingEmail(emailData);
-      
-      if (result && result.bookingCode) {
-        console.log(`   Booking code: ${result.bookingCode}`);
-        
-        // Check if booking exists
-        const existingBooking = await prisma.booking.findFirst({
-          where: {
-            userId,
-            bookingCode: result.bookingCode
-          }
-        });
-
-        let bookingCreated = false;
-        let bookingUpdated = false;
-
-        if (existingBooking) {
-          // Update existing booking
-          await prisma.booking.update({
-            where: { id: existingBooking.id },
-            data: {
-              ...filterBookingData(result),
-              userId,
-              gmailId: emailId,
-              gmailThreadId: email.threadId,
-              emailDate: new Date(parseInt(email.internalDate)),
-              updatedAt: new Date()
-            }
-          });
-          console.log(`🔄 Updated existing booking ${result.bookingCode}`);
-          bookingUpdated = true;
-
-          // Broadcast booking update via WebSocket
-          if (wsManager) {
-            wsManager.broadcastBookingUpdated(userId, {
-              id: existingBooking.id,
-              ...result
-            });
-          }
-        } else {
-          // Create new booking
-          const newBooking = await prisma.booking.create({
-            data: {
-              ...filterBookingData(result),
-              userId,
-              gmailId: emailId,
-              gmailThreadId: email.threadId,
-              emailDate: new Date(parseInt(email.internalDate)),
-            }
-          });
-          console.log(`✅ Created new booking ${result.bookingCode}`);
-          bookingCreated = true;
-
-          // Broadcast new booking via WebSocket
-          if (wsManager) {
-            wsManager.broadcastBookingCreated(userId, {
-              id: newBooking.id,
-              ...result
-            });
-          }
-        }
-
-        processed++;
-      } else {
-        console.log(`⚠️ No booking code found in email ${emailId}`);
-        errors++;
-      }
-
-      // Update progress
-      const progress = {
-        current: processed + skipped + errors,
-        total: allEmailIds.length,
-        processed,
-        skipped,
-        errors
-      };
-
-      // Update scanning status
-      scanningStatus.set(userId, {
-        isScanning: true,
-        year: year,
-        startTime: scanningStatus.get(userId)?.startTime || new Date(),
-        currentStatus: 'processing',
-        lastMessage: `📧 Bearbetat ${processed + skipped + errors}/${allEmailIds.length} emails...`,
-        progress
-      });
-
-      // Broadcast progress via WebSocket
-      if (wsManager) {
-        wsManager.broadcastScanProgress(userId, {
-          status: 'progress',
-          message: `📧 Bearbetat ${processed + skipped + errors}/${allEmailIds.length} emails...`,
-          progress
-        });
-      }
-
-    } catch (error: any) {
-      console.error(`❌ Error processing email ${emailId}:`, error);
-      errors++;
-    }
-  }
-
-  // Complete the session
-  const endTime = new Date();
-  const duration = endTime.getTime() - (scanningStatus.get(userId)?.startTime?.getTime() || endTime.getTime());
-  
-  await prisma.scanningSession.update({
-    where: { id: sessionId },
-    data: {
-      status: 'completed',
-      processedEmails: processed,
-      skippedEmails: skipped,
-      errorEmails: errors,
-      currentMessage: `✅ Scanning slutfört! Bearbetat: ${processed}, Hoppat över: ${skipped}, Fel: ${errors}`,
-      currentStep: 'completed',
-      completedAt: endTime
-    }
-  });
-
-  // Clean up scanning status
-  scanningStatus.delete(userId);
-
-  // Broadcast completion via WebSocket
-  if (wsManager) {
-    wsManager.broadcastScanStatus(userId, {
-      status: 'completed',
-      message: `✅ Scanning slutfört! Bearbetat: ${processed}, Hoppat över: ${skipped}, Fel: ${errors}`,
-      processed,
-      skipped,
-      errors,
-      duration: Math.round(duration / 1000)
-    });
-  }
-
-  console.log(`✅ Completed processEmailsForYear for user ${userId}, year ${year}. Processed: ${processed}, Skipped: ${skipped}, Errors: ${errors}`);
+  // This function is now handled by EmailProcessor in the main route
+  console.log(`✅ Completed processEmailsForYear for user ${userId}, year ${year}`);
 }
 
 export default router;

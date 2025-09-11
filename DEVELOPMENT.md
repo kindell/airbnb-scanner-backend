@@ -3,8 +3,8 @@
 ## Project Structure
 ```
 airbnb/
-├── airbnb-scanner-frontend/    # React/Vite frontend
-└── airbnb-scanner-backend/     # Node.js/Express backend
+├── frontend/    # React/Vite frontend
+└── backend/     # Node.js/Express backend
 ```
 
 ## Current Deployment Status
@@ -17,14 +17,14 @@ airbnb/
 
 **Backend Setup:**
 ```bash
-cd airbnb-scanner-backend
+cd backend
 npm install
 npm run dev  # Runs on http://localhost:3000
 ```
 
 **Frontend Setup:**
 ```bash
-cd airbnb-scanner-frontend
+cd frontend
 npm install
 
 # Update .env.local for local backend:
@@ -53,7 +53,7 @@ server: {
 
 **Current Setup - Frontend → Railway:**
 ```bash
-cd airbnb-scanner-frontend
+cd frontend
 
 # .env.local is configured for Railway:
 VITE_API_URL=https://airbnb-scanner-backend-production.up.railway.app
@@ -84,7 +84,7 @@ server: {
 
 **Local Testing:**
 ```bash
-cd airbnb-scanner-backend
+cd backend
 npm run dev
 ```
 
@@ -164,7 +164,7 @@ git push origin main  # Auto-deploys to Railway
 
 **Switch to Local Backend:**
 ```bash
-cd airbnb-scanner-frontend
+cd frontend
 echo "VITE_API_URL=http://localhost:3000
 VITE_WS_URL=ws://localhost:3000/ws" > .env.local
 # Update vite.config.ts proxy targets to localhost:3000
@@ -172,7 +172,7 @@ VITE_WS_URL=ws://localhost:3000/ws" > .env.local
 
 **Switch to Railway Backend:**
 ```bash
-cd airbnb-scanner-frontend  
+cd frontend  
 echo "VITE_API_URL=https://airbnb-scanner-backend-production.up.railway.app
 VITE_WS_URL=wss://airbnb-scanner-backend-production.up.railway.app/ws" > .env.local
 # Update vite.config.ts proxy targets to Railway URL
