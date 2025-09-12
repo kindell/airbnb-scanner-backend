@@ -10,6 +10,7 @@ import { configurePassport } from './auth/passport-config';
 import authRoutes from './routes/auth';
 import apiRoutes from './routes/api';
 import bookingStreamRoutes from './routes/booking-stream';
+import gmailOverviewRoutes from './routes/gmail-overview';
 import { sessionManager } from './utils/persistent-session-manager';
 import { initializeWebSocket } from './services/websocket-manager';
 
@@ -118,6 +119,7 @@ app.get('/health', (req, res) => {
 // Routes
 app.use('/auth', authRoutes);
 app.use('/api/bookings', bookingStreamRoutes);  // Register booking-stream BEFORE api routes
+app.use('/api/gmail', gmailOverviewRoutes);      // Gmail overview routes
 app.use('/api', apiRoutes);
 
 // API info endpoint
