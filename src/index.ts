@@ -41,9 +41,13 @@ app.use(cors({
     if (!origin) return callback(null, true);
     
     const allowedOrigins = [
-      process.env.FRONTEND_URL || 'http://localhost:3000',
-      'http://localhost:5174', // React dev server
-      'http://localhost:5173'  // Alternative Vite port
+      process.env.FRONTEND_URL || 'http://localhost:3000'
+    ];
+    
+    // Development patterns (localhost wildcards)
+    const devPatterns = [
+      /^http:\/\/localhost:\d+$/, // Any localhost port
+      /^http:\/\/127\.0\.0\.1:\d+$/ // Any 127.0.0.1 port
     ];
     
     // Lovable domain patterns
@@ -55,6 +59,12 @@ app.use(cors({
     
     // Check exact matches
     if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    // Check development patterns
+    if (devPatterns.some(pattern => pattern.test(origin))) {
+      console.log(`✅ CORS allowed for dev origin: ${origin}`);
       return callback(null, true);
     }
     
