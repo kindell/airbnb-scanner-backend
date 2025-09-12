@@ -1827,7 +1827,24 @@ router.post('/scan-year', async (req: any, res: any) => {
         });
         
         const emailIds = await processor.searchBookingEmails();
-        await processor.processEmails(emailIds);
+        
+        // Use parallel processing for performance optimization
+        const { getParallelProcessingConfig, calculatePerformanceImprovement } = await import('../config/parallel-processing');
+        const parallelConfig = getParallelProcessingConfig();
+        
+        if (parallelConfig.enabled && emailIds.length > 0) {
+          const perfEstimate = calculatePerformanceImprovement(parallelConfig, emailIds.length);
+          console.log(`🚀 Parallel Processing Enabled:`);
+          console.log(`   - Emails to process: ${emailIds.length}`);
+          console.log(`   - Batch size: ${parallelConfig.batchSize}`);
+          console.log(`   - Expected improvement: ${perfEstimate.improvementFactor.toFixed(1)}x faster`);
+          console.log(`   - Estimated time: ${Math.ceil(perfEstimate.estimatedTimeSeconds / 60)} minutes`);
+          
+          await processor.processEmailsParallel(emailIds, parallelConfig.batchSize, parallelConfig.delayMs);
+        } else {
+          console.log(`📧 Using sequential processing (parallel disabled or no emails)`);
+          await processor.processEmails(emailIds);
+        }
       } catch (error: any) {
         console.error(`❌ Background processing failed for session ${sessionRecord.id}:`, error);
         // Update session as failed

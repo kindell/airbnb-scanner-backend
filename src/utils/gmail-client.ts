@@ -325,6 +325,72 @@ export class GmailClient {
   }
 
   /**
+   * Batch get multiple emails in parallel with rate limiting
+   */
+  async getEmailsBatch(messageIds: string[], batchSize: number = 10, delayMs: number = 100): Promise<GmailMessage[]> {
+    console.log(`📦 Starting batch email processing: ${messageIds.length} emails, batch size: ${batchSize}`);
+    
+    const results: GmailMessage[] = [];
+    const errors: { messageId: string; error: any }[] = [];
+    
+    for (let i = 0; i < messageIds.length; i += batchSize) {
+      const batch = messageIds.slice(i, i + batchSize);
+      console.log(`🔄 Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(messageIds.length/batchSize)} (${batch.length} emails)`);
+      
+      try {
+        // Process batch in parallel
+        const batchPromises = batch.map(async (messageId) => {
+          try {
+            return await this.getEmail(messageId);
+          } catch (error) {
+            errors.push({ messageId, error });
+            console.error(`❌ Failed to get email ${messageId}:`, error);
+            return null;
+          }
+        });
+        
+        const batchResults = await Promise.all(batchPromises);
+        const validResults = batchResults.filter((result): result is GmailMessage => result !== null);
+        results.push(...validResults);
+        
+        console.log(`✅ Batch ${Math.floor(i/batchSize) + 1} completed: ${validResults.length}/${batch.length} successful`);
+        
+        // Rate limiting delay between batches
+        if (i + batchSize < messageIds.length && delayMs > 0) {
+          console.log(`⏱️  Rate limiting delay: ${delayMs}ms`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+        
+      } catch (error) {
+        console.error(`❌ Batch ${Math.floor(i/batchSize) + 1} failed:`, error);
+        // Continue with next batch even if this one fails
+      }
+    }
+    
+    console.log(`📊 Batch processing completed:`);
+    console.log(`   - Successfully processed: ${results.length}/${messageIds.length} emails`);
+    console.log(`   - Errors: ${errors.length}`);
+    
+    if (errors.length > 0) {
+      console.log('❌ Failed email IDs:', errors.map(e => e.messageId).join(', '));
+    }
+    
+    return results;
+  }
+  
+  /**
+   * Process emails safely with error handling and retries
+   */
+  async processEmailSafely(messageId: string): Promise<GmailMessage | null> {
+    try {
+      return await this.getEmail(messageId);
+    } catch (error) {
+      console.error(`❌ Failed to process email ${messageId}:`, error);
+      return null;
+    }
+  }
+
+  /**
    * Check if user has valid Gmail access
    */
   async hasValidAccess(): Promise<boolean> {

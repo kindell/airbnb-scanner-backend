@@ -73,6 +73,150 @@ export class EmailProcessor {
     });
   }
 
+  async processEmailsParallel(emailIds: string[], batchSize: number = 10, delayMs: number = 100): Promise<ProcessingResult> {
+    if (emailIds.length === 0) {
+      await this.completeSession(0, 0, 0, 0);
+      return { processed: 0, skipped: 0, errors: 0, totalEmails: 0 };
+    }
+
+    console.log(`🚀 Starting PARALLEL email processing: ${emailIds.length} emails, batch size: ${batchSize}`);
+
+    this.emitProgress({
+      status: 'processing',
+      message: `⚡ Börjar parallell bearbetning av ${emailIds.length} emails (batch: ${batchSize})...`
+    });
+
+    let processed = 0;
+    let skipped = 0;
+    let errors = 0;
+    const linkManager = new EmailLinkManager();
+
+    // Filter out already processed emails first
+    const unprocessedEmailIds = await this.filterUnprocessedEmails(emailIds);
+    console.log(`📋 Filtered emails: ${unprocessedEmailIds.length}/${emailIds.length} need processing`);
+    
+    skipped = emailIds.length - unprocessedEmailIds.length;
+    
+    if (unprocessedEmailIds.length === 0) {
+      console.log('✅ All emails already processed, skipping');
+      await this.completeSession(emailIds.length, 0, skipped, 0);
+      return { processed: 0, skipped, errors: 0, totalEmails: emailIds.length };
+    }
+
+    // Process emails in batches using Gmail batch API
+    for (let i = 0; i < unprocessedEmailIds.length; i += batchSize) {
+      // Check if scanning has been stopped
+      const session = await this.prisma.scanningSession.findUnique({
+        where: { id: this.sessionId },
+        select: { status: true }
+      });
+      
+      if (session?.status === 'cancelled') {
+        console.log(`🛑 Scanning stopped by user (session ${this.sessionId})`);
+        break;
+      }
+
+      const batch = unprocessedEmailIds.slice(i, i + batchSize);
+      const batchNumber = Math.floor(i/batchSize) + 1;
+      const totalBatches = Math.ceil(unprocessedEmailIds.length/batchSize);
+      
+      console.log(`🔄 Processing batch ${batchNumber}/${totalBatches}`);
+      
+      // Show immediate batch start feedback
+      this.emitProgress({
+        status: 'processing',
+        message: `📦 Hämtar batch ${batchNumber}/${totalBatches} (${batch.length} emails)...`
+      });
+      
+      try {
+        // Fetch emails in parallel
+        const emails = await this.gmailClient.getEmailsBatch(batch, batchSize, 0);
+        
+        // Update progress after fetch
+        this.emitProgress({
+          status: 'processing',
+          message: `⚡ Bearbetar batch ${batchNumber}/${totalBatches} parallellt...`
+        });
+        
+        // Process emails in parallel with live progress tracking
+        let completedInBatch = 0;
+        let batchErrors = 0;
+        
+        const batchPromises = emails.map(async (email, index) => {
+          try {
+            const result = await this.processSingleEmail(email, linkManager);
+            
+            // Thread-safe progress update
+            completedInBatch++;
+            const currentCompleted = processed + completedInBatch;
+            
+            // Throttle progress updates (only every few emails to avoid spam)
+            if (completedInBatch % Math.max(1, Math.floor(emails.length / 5)) === 0 || completedInBatch === emails.length) {
+              this.emitProgress({
+                status: 'processing',
+                message: `⚡ Batch ${batchNumber}/${totalBatches}: ${completedInBatch}/${emails.length} bearbetade (${currentCompleted}/${emailIds.length} totalt)`,
+                progress: {
+                  current: currentCompleted + skipped + batchErrors,
+                  total: emailIds.length,
+                  processed: currentCompleted,
+                  skipped,
+                  errors: errors + batchErrors
+                }
+              });
+            }
+            
+            return result;
+          } catch (error) {
+            console.error(`❌ Error processing email ${email.id}:`, error);
+            batchErrors++;
+            return { success: false, error };
+          }
+        });
+
+        const batchResults = await Promise.all(batchPromises);
+        
+        // Count results (use our tracked counters instead of filtering)
+        const batchProcessed = batchResults.filter(r => r.success).length;
+        
+        processed += batchProcessed;
+        errors += batchErrors;
+        
+        // Update progress
+        const progress = {
+          current: processed + skipped + errors,
+          total: emailIds.length,
+          processed,
+          skipped,
+          errors
+        };
+
+        this.emitProgress({
+          status: 'progress',
+          message: `✅ Batch ${batchNumber}/${totalBatches} klar: ${processed + skipped + errors}/${emailIds.length} emails (${batchProcessed} bearbetade, ${batchErrors} fel)`,
+          progress
+        });
+
+        // Rate limiting delay between batches
+        if (i + batchSize < unprocessedEmailIds.length && delayMs > 0) {
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+
+      } catch (error) {
+        console.error(`❌ Batch processing failed:`, error);
+        errors += batch.length;
+      }
+    }
+
+    console.log(`📊 Parallel processing completed:`);
+    console.log(`   - Total emails: ${emailIds.length}`);
+    console.log(`   - Processed: ${processed}`);
+    console.log(`   - Skipped: ${skipped}`);
+    console.log(`   - Errors: ${errors}`);
+
+    await this.completeSession(emailIds.length, processed, skipped, errors);
+    return { processed, skipped, errors, totalEmails: emailIds.length };
+  }
+
   async processEmails(emailIds: string[]): Promise<ProcessingResult> {
     if (emailIds.length === 0) {
       await this.completeSession(0, 0, 0, 0);
@@ -183,6 +327,55 @@ export class EmailProcessor {
 
     await this.completeSession(emailIds.length, processed, skipped, errors);
     return { processed, skipped, errors, totalEmails: emailIds.length };
+  }
+
+  /**
+   * Filter emails that haven't been processed yet (batch optimization)
+   */
+  private async filterUnprocessedEmails(emailIds: string[]): Promise<string[]> {
+    const existingBookings = await this.prisma.booking.findMany({
+      where: {
+        userId: this.userId,
+        gmailId: { in: emailIds }
+      },
+      select: { gmailId: true }
+    });
+
+    const processedIds = new Set(existingBookings.map(b => b.gmailId).filter(id => id));
+    return emailIds.filter(id => !processedIds.has(id));
+  }
+
+  /**
+   * Process a single email (extracted from the main loop for parallel processing)
+   */
+  private async processSingleEmail(email: any, linkManager: EmailLinkManager): Promise<{ success: boolean; error?: any }> {
+    try {
+      // Extract text content
+      const emailContent = this.extractEmailContent(email);
+      
+      // Extract headers for ML parser
+      const headers = this.extractEmailHeaders(email);
+      
+      // Parse with AI
+      const bookingData = await this.parser.parseBookingEmail({
+        emailId: email.id,
+        rawEmailContent: emailContent,
+        gmailId: email.id,
+        gmailThreadId: email.threadId,
+        headers: headers || undefined
+      });
+
+      if (bookingData && bookingData.bookingCode) {
+        const result = await this.processBookingData(bookingData, email.id, email, headers);
+        return { success: result };
+      } else {
+        console.log(`⚠️ No booking code found in email ${email.id}`);
+        return { success: false, error: 'No booking code found' };
+      }
+    } catch (error) {
+      console.error(`❌ Error processing single email ${email.id}:`, error);
+      return { success: false, error };
+    }
   }
 
   private async processBookingData(bookingData: any, emailId: string, email: any, headers: EmailHeaders | null): Promise<boolean> {
