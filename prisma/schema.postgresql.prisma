@@ -1,0 +1,240 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                   Int                  @id @default(autoincrement())
+  email                String               @unique
+  googleId             String?              @unique
+  displayName          String?
+  profilePicture       String?
+  settings             String?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  gmailAccessToken     String?
+  gmailRefreshToken    String?
+  gmailTokenExpiry     DateTime?
+  bookingPayoutMatches BookingPayoutMatch[]
+  bookings             Booking[]
+  payouts              Payout[]
+  pdfDocuments         PdfDocument[]
+  processingLogs       ProcessingLog[]
+  scanningSessions     ScanningSession[]
+  bookingUpdateEvents  BookingUpdateEvent[]
+
+  @@map("users")
+}
+
+model Booking {
+  id              Int                  @id @default(autoincrement())
+  userId          Int
+  bookingCode     String
+  guestName       String?
+  checkInDate     DateTime?
+  checkOutDate    DateTime?
+  nights          Int?
+  guestTotalEur   Float?
+  hostEarningsEur Float?
+  cleaningFeeEur  Float?
+  serviceFeeEur   Float?
+  occupancyTaxEur Float?
+  guestTotalSek   Float?
+  hostEarningsSek Float?
+  cleaningFeeSek  Float?
+  serviceFeeSek   Float?
+  occupancyTaxSek Float?
+  exchangeRate    Float?
+  status          String?
+  gmailId         String?
+  gmailThreadId   String?
+  emailDate       DateTime?
+  aiModel         String?
+  confidence      Float?
+  parseAttempts   Int                  @default(0)
+  guestRating          Float?
+  ratingDate           DateTime?
+  // Enrichment tracking fields
+  enrichmentStatus     String               @default("scanning") // "scanning", "enriching", "upcoming", "completed", "cancelled"
+  enrichmentProgress   Int                  @default(0)  // Current email being processed
+  enrichmentTotal      Int                  @default(0)  // Total emails to process  
+  // Change tracking fields
+  originalCheckInDate  DateTime?
+  originalCheckOutDate DateTime?
+  hasChanges           Boolean              @default(false)
+  lastChangeDate       DateTime?
+  changeCount          Int                  @default(0)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  payouts         BookingPayoutMatch[]
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pdfDocuments    PdfDocument[]
+  emailLinks      EmailLink[]
+  updateEvents    BookingUpdateEvent[]
+
+  @@unique([userId, bookingCode])
+  @@map("bookings")
+}
+
+model Payout {
+  id             Int                  @id @default(autoincrement())
+  userId         Int
+  payoutId       String?
+  amount         Float
+  currency       String               @default("EUR")
+  amountSek      Float?
+  exchangeRate   Float?
+  payoutDate     DateTime
+  gmailId        String?
+  gmailThreadId  String?
+  emailDate      DateTime?
+  aiModel        String?
+  confidence     Float?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  bookingMatches BookingPayoutMatch[]
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("payouts")
+}
+
+model BookingPayoutMatch {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  bookingId  Int
+  payoutId   Int
+  confidence Float
+  matchType  String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  payout     Payout   @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+  booking    Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([bookingId, payoutId])
+  @@map("booking_payout_matches")
+}
+
+model PdfDocument {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  bookingId     Int?
+  filename      String
+  filePath      String
+  fileSize      Int?
+  uploadedAt    DateTime @default(now())
+  extractedText String?
+  pageCount     Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  booking       Booking? @relation(fields: [bookingId], references: [id])
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("pdf_documents")
+}
+
+model ProcessingLog {
+  id             Int      @id @default(autoincrement())
+  userId         Int
+  operation      String
+  status         String
+  details        String?
+  errorMessage   String?
+  processingTime Int?
+  createdAt      DateTime @default(now())
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("processing_logs")
+}
+
+model ScanningSession {
+  // Existing core fields
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  year            Int
+  status          String    // 'queued', 'running', 'paused', 'completed', 'failed', 'cancelled'
+  totalEmails     Int?
+  processedEmails Int       @default(0)
+  skippedEmails   Int       @default(0)
+  errorEmails     Int       @default(0)
+  
+  // ✨ NEW: Detailed progress tracking
+  currentEmailIndex    Int?      // Which email we're processing (0-based)
+  currentEmailId       String?   // Gmail ID for current email
+  currentBookingCode   String?   // Current booking being processed
+  currentGuestName     String?   // Current guest name
+  
+  // ✨ NEW: Result statistics
+  bookingsFound        Int       @default(0)  // New bookings discovered
+  bookingsUpdated      Int       @default(0)  // Existing bookings updated
+  payoutsLinked        Int       @default(0)  // Payouts linked
+  changesDetected      Int       @default(0)  // Booking changes found
+  
+  // ✨ NEW: Performance metrics  
+  emailsPerMinute      Float?    // Processing speed
+  avgConfidence        Float?    // ML confidence average
+  mlFailures           Int       @default(0)  // ML parsing failures
+  
+  // ✨ NEW: Queue information
+  queuePosition        Int?      // Position in queue
+  estimatedTimeLeft    Int?      // Seconds remaining (estimate)
+  
+  // ✨ NEW: Scope information
+  searchQuery          String?   // Gmail search used
+  emailTypes           String?   // JSON: email types included
+  dateRange            String?   // JSON: {from, to} date range
+  
+  // ✨ NEW: Error tracking
+  lastError            String?   // Latest error message
+  errorDetails         String?   // JSON with stack trace
+  failedEmailIds       String?   // JSON array of failed Gmail IDs
+  
+  // Existing timestamps and relations
+  currentMessage  String?
+  currentStep     String?
+  startedAt       DateTime  @default(now())
+  completedAt     DateTime?
+  lastUpdateAt    DateTime  @default(now())
+  
+  // Relations
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  updateEvents    BookingUpdateEvent[]
+
+  @@map("scanning_sessions")
+}
+
+model BookingUpdateEvent {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  sessionId   Int?     // Link to scanning session
+  bookingId   Int
+  eventType   String   // 'created', 'updated', 'enriched'
+  changes     String?  // JSON with what changed
+  createdAt   DateTime @default(now())
+  
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session     ScanningSession? @relation(fields: [sessionId], references: [id])
+  booking     Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@map("booking_update_events")
+}
+
+model EmailLink {
+  id            Int      @id @default(autoincrement())
+  bookingId     Int
+  emailType     String   // "confirmation", "payout", "reminder", "cancellation", "modification"
+  gmailId       String
+  gmailThreadId String?
+  subject       String?
+  emailDate     DateTime?
+  createdAt     DateTime @default(now())
+  
+  booking       Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  
+  @@unique([bookingId, emailType, gmailId])
+  @@map("email_links")
+}

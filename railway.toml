@@ -1,6 +1,6 @@
 [build]
-builder = "dockerfile"
+builder = "dockerfile" 
 dockerfile = "Dockerfile"
 
 [deploy]
-startCommand = "sh -c 'npx prisma db push && node dist/index.js'"
+startCommand = "sh -c 'npx prisma generate --schema=prisma/schema.postgresql.prisma && npx prisma db push --schema=prisma/schema.postgresql.prisma && node dist/index.js'"
