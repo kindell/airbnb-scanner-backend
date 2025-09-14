@@ -7,6 +7,8 @@ import { EmailLinkManager } from '../utils/email-link-manager';
 import { BookingDataMerger } from '../utils/booking-data-merger';
 import { bookingUpdateEmitter } from '../utils/booking-update-emitter';
 import { wsManager } from '../services/websocket-manager';
+import { sessionManager } from '../utils/persistent-session-manager';
+import { BatchEnrichmentService } from './batch-enrichment';
 
 export interface EmailProcessorOptions {
   prisma: PrismaClient;
@@ -35,6 +37,7 @@ export class EmailProcessor {
   private onBroadcast?: (userId: number, data: any) => void;
   private gmailClient: GmailClient;
   private parser: MLEmailParser;
+  private newBookingCodes: Set<string> = new Set(); // Samla bokningskoder för batch enrichment
 
   constructor(options: EmailProcessorOptions) {
     this.prisma = options.prisma;
@@ -73,17 +76,19 @@ export class EmailProcessor {
     });
   }
 
-  async processEmailsParallel(emailIds: string[], batchSize: number = 10, delayMs: number = 100): Promise<ProcessingResult> {
+  async processEmailsSequential(emailIds: string[]): Promise<ProcessingResult> {
+    console.log(`🚀 [CLEAN v5.0 + ENRICHMENT] Sequential processing with ML workers + Gmail rate limiter + background enrichment - ${emailIds.length} emails`);
+    
     if (emailIds.length === 0) {
       await this.completeSession(0, 0, 0, 0);
       return { processed: 0, skipped: 0, errors: 0, totalEmails: 0 };
     }
 
-    console.log(`🚀 Starting PARALLEL email processing: ${emailIds.length} emails, batch size: ${batchSize}`);
+    console.log(`🚀 Starting SEQUENTIAL email processing: ${emailIds.length} emails`);
 
     this.emitProgress({
       status: 'processing',
-      message: `⚡ Börjar parallell bearbetning av ${emailIds.length} emails (batch: ${batchSize})...`
+      message: `🔄 Börjar bearbetning av ${emailIds.length} emails...`
     });
 
     let processed = 0;
@@ -103,8 +108,8 @@ export class EmailProcessor {
       return { processed: 0, skipped, errors: 0, totalEmails: emailIds.length };
     }
 
-    // Process emails in batches using Gmail batch API
-    for (let i = 0; i < unprocessedEmailIds.length; i += batchSize) {
+    // Process emails sequentially with Gmail rate limiting
+    for (let i = 0; i < unprocessedEmailIds.length; i++) {
       // Check if scanning has been stopped
       const session = await this.prisma.scanningSession.findUnique({
         where: { id: this.sessionId },
@@ -116,73 +121,46 @@ export class EmailProcessor {
         break;
       }
 
-      const batch = unprocessedEmailIds.slice(i, i + batchSize);
-      const batchNumber = Math.floor(i/batchSize) + 1;
-      const totalBatches = Math.ceil(unprocessedEmailIds.length/batchSize);
+      const emailId = unprocessedEmailIds[i];
+      const progress = i + 1;
+      const total = unprocessedEmailIds.length;
       
-      console.log(`🔄 Processing batch ${batchNumber}/${totalBatches}`);
+      console.log(`📧 Processing email ${progress}/${total}: ${emailId}`);
       
-      // Show immediate batch start feedback
       this.emitProgress({
         status: 'processing',
-        message: `📦 Hämtar batch ${batchNumber}/${totalBatches} (${batch.length} emails)...`
+        message: `📧 Bearbetar email ${progress}/${total}...`
       });
       
       try {
-        // Fetch emails in parallel
-        const emails = await this.gmailClient.getEmailsBatch(batch, batchSize, 0);
-        
-        // Update progress after fetch
-        this.emitProgress({
-          status: 'processing',
-          message: `⚡ Bearbetar batch ${batchNumber}/${totalBatches} parallellt...`
-        });
-        
-        // Process emails in parallel with live progress tracking
-        let completedInBatch = 0;
-        let batchErrors = 0;
-        
-        const batchPromises = emails.map(async (email, index) => {
-          try {
-            const result = await this.processSingleEmail(email, linkManager);
-            
-            // Thread-safe progress update
-            completedInBatch++;
-            const currentCompleted = processed + completedInBatch;
-            
-            // Throttle progress updates (only every few emails to avoid spam)
-            if (completedInBatch % Math.max(1, Math.floor(emails.length / 5)) === 0 || completedInBatch === emails.length) {
-              this.emitProgress({
-                status: 'processing',
-                message: `⚡ Batch ${batchNumber}/${totalBatches}: ${completedInBatch}/${emails.length} bearbetade (${currentCompleted}/${emailIds.length} totalt)`,
-                progress: {
-                  current: currentCompleted + skipped + batchErrors,
-                  total: emailIds.length,
-                  processed: currentCompleted,
-                  skipped,
-                  errors: errors + batchErrors
-                }
-              });
-            }
-            
-            return result;
-          } catch (error) {
-            console.error(`❌ Error processing email ${email.id}:`, error);
-            batchErrors++;
-            return { success: false, error };
-          }
-        });
 
-        const batchResults = await Promise.all(batchPromises);
-        
-        // Count results (use our tracked counters instead of filtering)
-        const batchProcessed = batchResults.filter(r => r.success).length;
-        
-        processed += batchProcessed;
-        errors += batchErrors;
-        
-        // Update progress
-        const progress = {
+        // Fetch email via Gmail Rate Limiter (1 request/second)
+        console.log(`🔄 [v5.0] Fetching email via rate limiter: ${emailId}`);
+        const email = await this.gmailClient.getEmail(emailId);
+
+        if (!email) {
+          console.log(`⚠️ Could not fetch email ${emailId}`);
+          errors++;
+          continue;
+        }
+
+        // Process email with ML parser
+        console.log(`🧠 [v5.0] Processing with ML parser: ${emailId}`);
+        const result = await this.processSingleEmail(email, linkManager);
+        console.log(`🔍 [DEBUG] processSingleEmail returned: ${JSON.stringify({ success: result.success, error: result.error })}`);
+
+        if (result.success) {
+          processed++;
+          console.log(`✅ Email ${processed}/${emailIds.length} processed successfully`);
+        } else {
+          errors++;
+          console.log(`❌ Email ${processed + errors}/${emailIds.length} failed: ${result.error}`);
+        }
+
+        console.log(`🔍 [DEBUG] About to update progress for email ${progress}/${total}`);
+
+        // Update progress every email
+        const progressData = {
           current: processed + skipped + errors,
           total: emailIds.length,
           processed,
@@ -190,28 +168,33 @@ export class EmailProcessor {
           errors
         };
 
-        this.emitProgress({
+        const progressMessage = {
           status: 'progress',
-          message: `✅ Batch ${batchNumber}/${totalBatches} klar: ${processed + skipped + errors}/${emailIds.length} emails (${batchProcessed} bearbetade, ${batchErrors} fel)`,
-          progress
-        });
+          message: `📧 ${processed + skipped + errors}/${emailIds.length} emails bearbetade (${processed} lyckade, ${errors} fel)`,
+          progress: progressData
+        };
 
-        // Rate limiting delay between batches
-        if (i + batchSize < unprocessedEmailIds.length && delayMs > 0) {
-          await new Promise(resolve => setTimeout(resolve, delayMs));
-        }
+        console.log('🔍 [DEBUG] Sending progress to frontend:', JSON.stringify(progressMessage));
+        this.emitProgress(progressMessage);
+
+        console.log(`🔍 [DEBUG] Progress emitted for email ${progress}/${total}, about to continue to next email`);
 
       } catch (error) {
-        console.error(`❌ Batch processing failed:`, error);
-        errors += batch.length;
+        console.error(`❌ Error processing email ${emailId}:`, error);
+        errors++;
       }
+
+      console.log(`🔍 [DEBUG] End of loop iteration for email ${progress}/${total}, moving to next email...`);
     }
 
-    console.log(`📊 Parallel processing completed:`);
+    console.log(`📊 Sequential processing completed:`);
     console.log(`   - Total emails: ${emailIds.length}`);
     console.log(`   - Processed: ${processed}`);
     console.log(`   - Skipped: ${skipped}`);
     console.log(`   - Errors: ${errors}`);
+
+    // Run batch enrichment after scanning is complete
+    await this.runBatchEnrichment();
 
     await this.completeSession(emailIds.length, processed, skipped, errors);
     return { processed, skipped, errors, totalEmails: emailIds.length };
@@ -325,6 +308,9 @@ export class EmailProcessor {
       }
     }
 
+    // Run batch enrichment after scanning is complete
+    await this.runBatchEnrichment();
+
     await this.completeSession(emailIds.length, processed, skipped, errors);
     return { processed, skipped, errors, totalEmails: emailIds.length };
   }
@@ -356,7 +342,8 @@ export class EmailProcessor {
       // Extract headers for ML parser
       const headers = this.extractEmailHeaders(email);
       
-      // Parse with AI
+      // [CLEAN v5.0] Parse with ML, enrich in background
+      console.log(`🧠 [CLEAN v5.0] Using ML parser for email ${email.id}`);
       const bookingData = await this.parser.parseBookingEmail({
         emailId: email.id,
         rawEmailContent: emailContent,
@@ -380,22 +367,42 @@ export class EmailProcessor {
 
   private async processBookingData(bookingData: any, emailId: string, email: any, headers: EmailHeaders | null): Promise<boolean> {
     try {
-      // Update session with current booking being processed
-      await this.prisma.scanningSession.update({
-        where: { id: this.sessionId },
-        data: {
-          currentBookingCode: bookingData.bookingCode,
-          lastUpdateAt: new Date()
-        }
-      });
+      console.log(`🔍 [DEBUG] processBookingData starting for booking ${bookingData.bookingCode}`);
+
+      // Update session with current booking being processed (non-blocking with timeout)
+      console.log(`🔍 [DEBUG] Updating scanning session with current booking code ${bookingData.bookingCode}`);
+      try {
+        const sessionUpdatePromise = this.prisma.scanningSession.update({
+          where: { id: this.sessionId },
+          data: {
+            currentBookingCode: bookingData.bookingCode,
+            lastUpdateAt: new Date()
+          }
+        });
+
+        // Add 5 second timeout to prevent hanging
+        await Promise.race([
+          sessionUpdatePromise,
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Session update timeout')), 5000)
+          )
+        ]);
+        console.log(`🔍 [DEBUG] Scanning session updated successfully`);
+      } catch (error) {
+        console.error(`⚠️ [DEBUG] Session update failed (non-critical):`, error instanceof Error ? error.message : String(error));
+        // Continue processing - session update failure should not block email processing
+      }
 
       // Check if booking exists
+      console.log(`🔍 [DEBUG] Checking if booking ${bookingData.bookingCode} exists in database`);
       const existingBooking = await this.prisma.booking.findFirst({
         where: {
           userId: this.userId,
           bookingCode: bookingData.bookingCode
         }
       });
+      console.log(`🔍 [DEBUG] Database query completed: ${existingBooking ? 'booking exists' : 'booking does not exist'}`);
+
 
       console.log(`🔍 [ENRICHMENT DEBUG] Booking ${bookingData.bookingCode}: ${existingBooking ? 'EXISTS' : 'NEW'}`);
       if (existingBooking) {
@@ -419,11 +426,9 @@ export class EmailProcessor {
 
         console.log(`🔄 Updated existing booking ${bookingData.bookingCode}`);
 
-        // Check if enrichment is needed for existing booking
-        if (existingBooking.enrichmentStatus === 'scanning' || existingBooking.enrichmentStatus === 'pending') {
-          console.log(`🔍 [ENRICHMENT DEBUG] Existing booking needs enrichment: ${bookingData.bookingCode}`);
-          await this.enrichBooking(updatedBooking, bookingData);
-        }
+        // Mark ALL existing bookings for batch enrichment during scanning
+        console.log(`🔍 [BATCH ENRICHMENT] Existing booking marked for batch enrichment: ${bookingData.bookingCode}`);
+        this.newBookingCodes.add(bookingData.bookingCode);
 
         // Emit booking update event
         try {
@@ -463,8 +468,9 @@ export class EmailProcessor {
           wsManager.broadcastBookingCreated(this.userId, newBooking);
         }
 
-        // Inline enrichment: First time seeing this booking code, enrich it immediately
-        await this.enrichBooking(newBooking, bookingData);
+        // Mark new booking for batch enrichment
+        console.log(`🔍 [BATCH ENRICHMENT] New booking marked for batch enrichment: ${bookingData.bookingCode}`);
+        this.newBookingCodes.add(bookingData.bookingCode);
       }
 
       // Save email link for this booking
@@ -481,72 +487,69 @@ export class EmailProcessor {
     }
   }
 
-  private async enrichBooking(booking: any, bookingData: any): Promise<void> {
+  /**
+   * Kör batch enrichment för alla insamlade bokningskoder
+   */
+  async runBatchEnrichment(): Promise<void> {
+    if (this.newBookingCodes.size === 0) {
+      console.log(`📦 [BATCH ENRICHMENT] No booking codes to enrich, skipping batch enrichment`);
+      return;
+    }
+
+    const bookingCodes = Array.from(this.newBookingCodes);
+    console.log(`🚀 [BATCH ENRICHMENT] Starting batch enrichment for ${bookingCodes.length} NEW booking codes: ${bookingCodes.join(', ')}`);
+
     try {
-      console.log(`🔍 [ENRICHMENT DEBUG] Starting enrichment for ${bookingData.bookingCode}...`);
-      
-      // Update status to 'enriching' before starting enrichment
-      const enrichingBooking = await this.prisma.booking.update({
-        where: { id: booking.id },
-        data: {
-          enrichmentStatus: 'enriching',
-          enrichmentProgress: 0
+      const batchEnrichmentService = new BatchEnrichmentService(
+        this.gmailClient,
+        this.userId,
+        this.sessionId.toString()
+      );
+
+      // Progress callback to update session manager with enrichment stats
+      const onProgress = (progress: any) => {
+        console.log(`📊 [BATCH ENRICHMENT] Progress: ${progress.phase} - Batch ${progress.currentBatch}/${progress.totalBatches}, Email ${progress.currentEmail}/${progress.totalEmails}, Enriched ${progress.bookingsEnriched}/${progress.totalBookings}`);
+
+        // Broadcast enrichment progress via WebSocket
+        if (wsManager) {
+          wsManager.broadcastScanProgress(this.userId, {
+            enrichment: {
+              total: progress.totalBookings,
+              completed: progress.bookingsEnriched,
+              inProgress: Math.max(0, progress.currentEmail - progress.bookingsEnriched),
+              percentage: Math.round((progress.bookingsEnriched / progress.totalBookings) * 100),
+              message: `🧠 Enriching: ${progress.bookingsEnriched}/${progress.totalBookings} bookings completed${progress.currentEmail > progress.bookingsEnriched ? ` (${progress.currentEmail - progress.bookingsEnriched} in progress...)` : ''}`
+            }
+          });
         }
-      });
-      
-      // Broadcast enriching status update
+      };
+
+      const result = await batchEnrichmentService.batchEnrichBookings(bookingCodes, onProgress);
+
+      console.log(`✅ [BATCH ENRICHMENT] Completed: ${result.totalEmailsProcessed} emails processed, ${result.errors.length} errors in ${result.executionTime}ms`);
+
+      // Broadcast final enrichment stats
       if (wsManager) {
-        wsManager.broadcastBookingUpdated(this.userId, enrichingBooking);
+        wsManager.broadcastScanProgress(this.userId, {
+          enrichment: {
+            total: bookingCodes.length,
+            completed: bookingCodes.length,
+            inProgress: 0,
+            percentage: 100,
+            message: `🧠 Enrichment completed: ${bookingCodes.length}/${bookingCodes.length} bookings enriched`
+          }
+        });
       }
-      
-      const { BookingEnricher } = await import('../utils/booking-enricher');
-      const enricher = new BookingEnricher(this.gmailClient, this.userId);
-      console.log(`🔍 [ENRICHMENT DEBUG] Creating enricher with Gmail client: ${this.gmailClient ? 'YES' : 'NO'}`);
-      const enrichmentResult = await enricher.enrichBooking(bookingData.bookingCode);
-      
-      // Get the updated booking to check final status after enrichment
-      const updatedBooking = await this.prisma.booking.findUnique({
-        where: { id: booking.id }
-      });
-      
-      // Determine final status based on enrichment results
-      let finalStatus = 'upcoming'; // Default
-      
-      // Check if cancelled based on the booking status after enrichment
-      if (updatedBooking?.status === 'cancelled' || updatedBooking?.status === 'cancelled_with_payout') {
-        finalStatus = 'cancelled';
-      } else if (bookingData.checkOutDate && new Date(bookingData.checkOutDate) < new Date()) {
-        // Past checkout date = completed
-        finalStatus = 'completed';
-      }
-      
-      // Update final enrichment status
-      const finalBooking = await this.prisma.booking.update({
-        where: { id: booking.id },
-        data: {
-          enrichmentStatus: finalStatus,
-          enrichmentProgress: enrichmentResult.emailsProcessed || 0,
-          enrichmentTotal: enrichmentResult.emailsFound || 0
-        }
-      });
-      
-      // Broadcast enrichment completion
-      if (wsManager) {
-        wsManager.broadcastBookingUpdated(this.userId, finalBooking);
-      }
-      
-      console.log(`✅ Enrichment completed for ${bookingData.bookingCode}: ${finalStatus}`);
-      
-    } catch (enrichmentError) {
-      console.error(`❌ Failed to enrich booking ${bookingData.bookingCode}:`, enrichmentError);
-      
-      // Update status to 'error' if enrichment fails
-      await this.prisma.booking.update({
-        where: { id: booking.id },
-        data: {
-          enrichmentStatus: 'error'
-        }
-      });
+
+      // Clear the booking codes set for next run
+      this.newBookingCodes.clear();
+
+    } catch (error: any) {
+      console.error(`❌ [BATCH ENRICHMENT] Error: ${error?.message}`);
+      console.error(error);
+
+      // Clear the set even on error to prevent retry loops
+      this.newBookingCodes.clear();
     }
   }
 
@@ -714,6 +717,47 @@ export class EmailProcessor {
     filtered.parseAttempts = 1;
 
     return filtered;
+  }
+
+  /**
+   * Fallback email parsing without ML workers (TEST v3.0)
+   */
+  private async fallbackParseBookingEmail(emailContent: string, emailId: string): Promise<any> {
+    console.log(`📝 [FALLBACK v3.0] Parsing email ${emailId} with simple regex extraction`);
+    
+    // Simple regex-based booking code extraction
+    const bookingCodeMatch = emailContent.match(/(?:booking|reservation|confirmation)[\s#]*:?\s*([A-Z0-9]{6,12})/i);
+    
+    if (bookingCodeMatch) {
+      const bookingCode = bookingCodeMatch[1];
+      console.log(`✅ [FALLBACK v3.0] Found booking code: ${bookingCode}`);
+      
+      // Return minimal booking data structure
+      return {
+        bookingCode,
+        emailType: 'confirmation',
+        confidence: 0.8,
+        gmailId: emailId,
+        // Add some basic extracted data if possible
+        guestName: this.extractGuestName(emailContent),
+        checkInDate: this.extractDate(emailContent, 'check.*in'),
+        checkOutDate: this.extractDate(emailContent, 'check.*out')
+      };
+    }
+    
+    console.log(`❌ [FALLBACK v3.0] No booking code found in email ${emailId}`);
+    return null;
+  }
+
+  private extractGuestName(content: string): string | null {
+    const nameMatch = content.match(/(?:guest|name|hello|dear)[\s:]*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i);
+    return nameMatch ? nameMatch[1] : null;
+  }
+
+  private extractDate(content: string, pattern: string): string | null {
+    const regex = new RegExp(pattern + '[\\s:]*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})', 'i');
+    const match = content.match(regex);
+    return match ? match[1] : null;
   }
 
   private async saveMainEmailLink(bookingId: number | undefined, bookingData: any, headers: EmailHeaders | null): Promise<void> {

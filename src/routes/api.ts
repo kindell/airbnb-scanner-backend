@@ -10,6 +10,7 @@ import { EmailLinkManager } from '../utils/email-link-manager';
 import { BookingDataMerger } from '../utils/booking-data-merger';
 import { bookingUpdateEmitter } from '../utils/booking-update-emitter';
 import { wsManager } from '../services/websocket-manager';
+import { sessionManager } from '../utils/persistent-session-manager';
 
 const router = express.Router();
 
@@ -1294,6 +1295,103 @@ router.get('/payouts', async (req: any, res: any) => {
 });
 
 /**
+ * GET /api/bookings/:bookingId/gmail-links
+ * Get Gmail links for a specific booking
+ */
+router.get('/bookings/:bookingId/gmail-links', async (req: any, res: any) => {
+  try {
+    const userId = req.user!.id;
+    const bookingId = parseInt(req.params.bookingId);
+    
+    if (isNaN(bookingId)) {
+      return res.status(400).json({ error: 'Invalid booking ID' });
+    }
+    
+    // Verify user owns this booking
+    const booking = await prisma.booking.findUnique({
+      where: { id: bookingId },
+      select: { userId: true, bookingCode: true, guestName: true }
+    });
+    
+    if (!booking || booking.userId !== userId) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+    
+    // Get all email links for this booking
+    const emailLinks = await EmailLinkManager.getEmailLinksForBooking(bookingId);
+    
+    // Generate Gmail URLs organized by email type
+    const gmailUrls = EmailLinkManager.generateGmailUrls(emailLinks);
+    
+    res.json({
+      bookingId,
+      bookingCode: booking.bookingCode,
+      guestName: booking.guestName,
+      emailCount: emailLinks.length,
+      gmailUrls,
+      emailDetails: emailLinks.map(link => ({
+        emailType: link.emailType,
+        subject: link.subject,
+        emailDate: link.emailDate,
+        gmailUrl: `https://mail.google.com/mail/u/0/#inbox/${link.gmailId}`
+      }))
+    });
+  } catch (error) {
+    console.error('❌ Gmail links API error:', error);
+    res.status(500).json({ error: 'Failed to fetch Gmail links' });
+  }
+});
+
+/**
+ * GET /api/bookings/code/:bookingCode/gmail-links
+ * Get Gmail links for a booking by booking code
+ */
+router.get('/bookings/code/:bookingCode/gmail-links', async (req: any, res: any) => {
+  try {
+    const userId = req.user!.id;
+    const bookingCode = req.params.bookingCode;
+    
+    // Find booking by code
+    const booking = await prisma.booking.findUnique({
+      where: {
+        userId_bookingCode: {
+          userId,
+          bookingCode
+        }
+      },
+      select: { id: true, bookingCode: true, guestName: true }
+    });
+    
+    if (!booking) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+    
+    // Get all email links for this booking
+    const emailLinks = await EmailLinkManager.getEmailLinksForBooking(booking.id);
+    
+    // Generate Gmail URLs organized by email type
+    const gmailUrls = EmailLinkManager.generateGmailUrls(emailLinks);
+    
+    res.json({
+      bookingId: booking.id,
+      bookingCode: booking.bookingCode,
+      guestName: booking.guestName,
+      emailCount: emailLinks.length,
+      gmailUrls,
+      emailDetails: emailLinks.map(link => ({
+        emailType: link.emailType,
+        subject: link.subject,
+        emailDate: link.emailDate,
+        gmailUrl: `https://mail.google.com/mail/u/0/#inbox/${link.gmailId}`
+      }))
+    });
+  } catch (error) {
+    console.error('❌ Gmail links API error:', error);
+    res.status(500).json({ error: 'Failed to fetch Gmail links' });
+  }
+});
+
+/**
  * POST /api/test-parser
  * Test parser functionality with sample data
  */
@@ -1817,12 +1915,21 @@ router.post('/scan-year', async (req: any, res: any) => {
           onProgress: (data: any) => {
             console.log('📊 [PROGRESS] EmailProcessor progress:', data.status, data.message || data.progress);
           },
-          onBroadcast: (userId: number, data: any) => {
+          onBroadcast: async (userId: number, data: any) => {
             console.log('📡 [BROADCAST] Broadcasting progress:', data.status, data.message || data.progress);
             broadcastToStreams(userId, data);
             if (wsManager) {
               wsManager.broadcastScanStatus(userId, data);
             }
+
+            // DISABLED: Old individual enrichment system - now using batch enrichment only
+            // Update enrichment progress during scanning
+            // if ((data.status === 'progress' || data.status === 'processing') && sessionManager) {
+            //   console.log(`🔍 [DEBUG] Triggering enrichment stats update for user ${userId} (${data.status})`);
+            //   await sessionManager.updateEnrichmentStats(userId).catch(err =>
+            //     console.warn(`⚠️ Failed to update enrichment stats during scan:`, err?.message)
+            //   );
+            // }
           }
         });
         
@@ -1832,18 +1939,22 @@ router.post('/scan-year', async (req: any, res: any) => {
         const { getParallelProcessingConfig, calculatePerformanceImprovement } = await import('../config/parallel-processing');
         const parallelConfig = getParallelProcessingConfig();
         
+        console.log(`🔍 [DEBUG] Parallel config check: enabled=${parallelConfig.enabled}, emailCount=${emailIds.length}`);
+        console.log(`🔍 [DEBUG] Parallel config details:`, JSON.stringify(parallelConfig, null, 2));
+        
         if (parallelConfig.enabled && emailIds.length > 0) {
           const perfEstimate = calculatePerformanceImprovement(parallelConfig, emailIds.length);
-          console.log(`🚀 Parallel Processing Enabled:`);
+          console.log(`🚀 [CLEAN v5.0 + ENRICHMENT] Sequential Processing with ML + Gmail Rate Limiter + Background Enrichment:`);
           console.log(`   - Emails to process: ${emailIds.length}`);
-          console.log(`   - Batch size: ${parallelConfig.batchSize}`);
-          console.log(`   - Expected improvement: ${perfEstimate.improvementFactor.toFixed(1)}x faster`);
-          console.log(`   - Estimated time: ${Math.ceil(perfEstimate.estimatedTimeSeconds / 60)} minutes`);
+          console.log(`   - ML Workers: Enabled (persistent processes)`);
+          console.log(`   - Gmail Rate Limiter: 1 request/second`);
+          console.log(`   - Enrichment: Background (non-blocking)`);
           
-          await processor.processEmailsParallel(emailIds, parallelConfig.batchSize, parallelConfig.delayMs);
+          await processor.processEmailsSequential(emailIds);
         } else {
-          console.log(`📧 Using sequential processing (parallel disabled or no emails)`);
-          await processor.processEmails(emailIds);
+          console.log(`📧 [CLEAN v5.0] Using sequential processing`);
+          console.log(`   - Email count: ${emailIds.length}`);
+          await processor.processEmailsSequential(emailIds);
         }
       } catch (error: any) {
         console.error(`❌ Background processing failed for session ${sessionRecord.id}:`, error);
@@ -2025,118 +2136,55 @@ router.post('/rescan-booking', async (req: any, res: any) => {
       });
     }
 
-    // Get the ML parser
-    const { MLEmailParser } = require('../parsers/MLEmailParser');
-    const parser = new MLEmailParser(userId);
+    // Use BookingEnricher instead of manual ML parsing - this ensures we get the same 
+    // robust enrichment process that works correctly with cancellations
+    const { BookingEnricher } = require('../utils/booking-enricher');
+    const enricher = new BookingEnricher(gmailClient, userId);
 
     let processedCount = 0;
     let bookingCreated = false;
     let bookingUpdated = false;
     let enrichmentRun = false;
 
-    // Process each email
-    for (const emailId of emailIds) {
-      try {
-        console.log(`⚡ Processing email ${emailId} for booking ${bookingCode}`);
-        
-        // Get email content
-        const email = await gmailClient.getEmail(emailId);
-        
-        // Extract email content and headers for ML parser
-        const emailContent = extractEmailContent(email);
-        const headers = extractEmailHeaders(email);
-        
-        // Parse with ML
-        const result = await parser.parseBookingEmail({
-          emailId,
-          rawEmailContent: emailContent,
-          gmailId: emailId,
-          gmailThreadId: email.threadId,
-          headers: headers
-        });
+    try {
+      console.log(`🔄 Using BookingEnricher for comprehensive rescan of ${bookingCode}...`);
+      
+      // Check if booking exists before enrichment
+      const existingBookingBefore = await prisma.booking.findFirst({
+        where: { userId, bookingCode }
+      });
 
-        if (result && result.bookingCode === bookingCode) {
-          console.log(`✅ Successfully parsed booking data from email ${emailId}`);
-          console.log(`   Email type: ${(result as any).emailType}`);
-          console.log(`   Booking code: ${result.bookingCode}`);
-          console.log(`🐛 [DATE DEBUG] Rescan API - ML parser result:`);
-          console.log(`   checkInDate: ${result.checkInDate} (type: ${typeof result.checkInDate})`);
-          console.log(`   checkOutDate: ${result.checkOutDate} (type: ${typeof result.checkOutDate})`);
+      // Run the same enrichment process as the scanner and debug tool
+      const enrichmentResult = await enricher.enrichBooking(bookingCode);
+      
+      // Check booking status after enrichment
+      const existingBookingAfter = await prisma.booking.findFirst({
+        where: { userId, bookingCode }
+      });
+      
+      if (existingBookingAfter) {
+        if (!existingBookingBefore) {
+          bookingCreated = true;
+          console.log(`🆕 BookingEnricher created new booking ${bookingCode}`);
+        } else {
+          bookingUpdated = true;
+          console.log(`🔄 BookingEnricher updated existing booking ${bookingCode}`);
           
-          // Check if booking exists
-          const existingBooking = await prisma.booking.findFirst({
-            where: {
-              userId,
-              bookingCode: result.bookingCode
-            }
-          });
-
-          if (existingBooking) {
-            // Handle different email types
-            const emailType = (result as any).emailType;
-            
-            if (emailType === 'cancellation') {
-              // Update booking status to cancelled
-              await prisma.booking.update({
-                where: { id: existingBooking.id },
-                data: {
-                  status: 'cancelled',
-                  gmailId: emailId,
-                  gmailThreadId: email.threadId,
-                  emailDate: new Date(parseInt(email.internalDate)),
-                  updatedAt: new Date()
-                }
-              });
-              console.log(`❌ Updated booking ${bookingCode} status to CANCELLED`);
-            } else {
-              // Update existing booking with new data
-              await prisma.booking.update({
-                where: { id: existingBooking.id },
-                data: {
-                  ...filterBookingData(result),
-                  userId,
-                  gmailId: emailId,
-                  gmailThreadId: email.threadId,
-                  emailDate: new Date(parseInt(email.internalDate)),
-                  updatedAt: new Date()
-                }
-              });
-              console.log(`🔄 Updated existing booking ${bookingCode}`);
-            }
-            bookingUpdated = true;
-          } else {
-            // Don't create new bookings for cancellation emails
-            if ((result as any).emailType !== 'cancellation') {
-              // Create new booking
-              await prisma.booking.create({
-                data: {
-                  ...filterBookingData(result),
-                  userId,
-                  gmailId: emailId,
-                  gmailThreadId: email.threadId,
-                  emailDate: new Date(parseInt(email.internalDate)),
-                  createdAt: new Date(),
-                  updatedAt: new Date()
-                }
-              });
-              bookingCreated = true;
-              console.log(`🆕 Created new booking ${bookingCode}`);
-            } else {
-              console.log(`⚠️  Cancellation email for non-existent booking ${bookingCode}, skipping creation`);
-            }
+          // Check if status changed (e.g. to cancelled)
+          if (existingBookingBefore.status !== existingBookingAfter.status) {
+            console.log(`   Status changed: ${existingBookingBefore.status} → ${existingBookingAfter.status}`);
           }
-
-          processedCount++;
         }
-      } catch (error) {
-        console.error(`❌ Error processing email ${emailId}:`, error);
       }
-    }
-
-    // Enrichment is now handled inline by EmailProcessor during processing
-    if (processedCount > 0) {
+      
+      processedCount = enrichmentResult.emailsProcessed || emailIds.length;
       enrichmentRun = true;
-      console.log(`✨ EmailProcessor enrichment completed for booking ${bookingCode}`);
+      
+      console.log(`✅ BookingEnricher rescan completed for ${bookingCode}: ${enrichmentResult.emailsProcessed}/${enrichmentResult.emailsFound} emails processed`);
+      
+    } catch (error) {
+      console.error(`❌ BookingEnricher error for ${bookingCode}:`, error);
+      throw error;
     }
 
     res.json({

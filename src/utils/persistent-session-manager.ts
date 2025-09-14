@@ -8,6 +8,8 @@
 
 import { prisma } from '../database/client';
 import { EventEmitter } from 'events';
+import { wsManager } from '../services/websocket-manager';
+import { bookingUpdateEmitter } from './booking-update-emitter';
 
 export interface EnhancedSessionStatus {
   // Core session info
@@ -33,6 +35,11 @@ export interface EnhancedSessionStatus {
   bookingsUpdated: number;
   payoutsLinked: number;
   changesDetected: number;
+
+  // Enrichment tracking
+  enrichmentTotal: number;       // Total bookings that need enrichment
+  enrichmentCompleted: number;   // Bookings that have completed enrichment
+  enrichmentInProgress: number;  // Bookings currently being enriched
   
   // Performance metrics
   emailsPerMinute?: number;
@@ -72,6 +79,9 @@ export class PersistentSessionManager extends EventEmitter {
     super();
     // Restore active sessions on startup
     this.restoreActiveSessions().catch(console.error);
+
+    // Listen for booking enrichment events to update progress
+    this.setupEnrichmentListener();
   }
   
   /**
@@ -138,8 +148,14 @@ export class PersistentSessionManager extends EventEmitter {
       isScanning: false,
       scanStartTime: now
     };
-    
+
     this.memoryCache.set(userId, memorySession);
+
+    // DISABLED: Old individual enrichment stats - now using batch enrichment only
+    // Initialize enrichment stats
+    // await this.updateEnrichmentStats(userId).catch(err =>
+    //   console.warn(`⚠️ Failed to initialize enrichment stats:`, err?.message)
+    // );
     
     console.log(`📝 Created new scanning session ${dbSession.id} for user ${userId}, year ${year}`);
     
@@ -338,6 +354,9 @@ export class PersistentSessionManager extends EventEmitter {
       bookingsUpdated: dbSession.bookingsUpdated || 0,
       payoutsLinked: dbSession.payoutsLinked || 0,
       changesDetected: dbSession.changesDetected || 0,
+      enrichmentTotal: 0,        // Will be calculated dynamically
+      enrichmentCompleted: 0,    // Will be calculated dynamically
+      enrichmentInProgress: 0,   // Will be calculated dynamically
       emailsPerMinute: dbSession.emailsPerMinute,
       avgConfidence: dbSession.avgConfidence,
       mlFailures: dbSession.mlFailures || 0,
@@ -356,6 +375,178 @@ export class PersistentSessionManager extends EventEmitter {
       lastUpdateAt: dbSession.lastUpdateAt,
       isScanning: dbSession.status === 'running'
     };
+  }
+
+  /**
+   * Calculate enrichment statistics for a user's current scanning session
+   */
+  async calculateEnrichmentStats(userId: number): Promise<{
+    total: number;
+    completed: number;
+    inProgress: number;
+  }> {
+    // Get the current active session to filter bookings created during this scan
+    const currentSession = await prisma.scanningSession.findFirst({
+      where: {
+        userId,
+        status: { in: ['running', 'queued'] },
+        completedAt: null
+      },
+      orderBy: { startedAt: 'desc' }
+    });
+
+    if (!currentSession) {
+      // No active session, check for recently completed sessions with ongoing enrichment
+      const recentSession = await prisma.scanningSession.findFirst({
+        where: {
+          userId,
+          status: 'completed',
+          completedAt: {
+            gte: new Date(Date.now() - 10 * 60 * 1000) // Within last 10 minutes
+          }
+        },
+        orderBy: { completedAt: 'desc' }
+      });
+
+      if (!recentSession) {
+        return { total: 0, completed: 0, inProgress: 0 };
+      }
+
+      // Use recent session for stats calculation
+      const whereClause: any = {
+        userId,
+        createdAt: {
+          gte: recentSession.startedAt
+        }
+      };
+
+      if (recentSession.completedAt) {
+        whereClause.createdAt.lte = recentSession.completedAt;
+      }
+
+      const stats = await prisma.booking.groupBy({
+        by: ['enrichmentStatus'],
+        where: whereClause,
+        _count: { id: true }
+      });
+
+      let total = 0, completed = 0, inProgress = 0;
+
+      stats.forEach(stat => {
+        const count = stat._count?.id || 0;
+        total += count;
+        if (['completed', 'upcoming', 'cancelled'].includes(stat.enrichmentStatus)) {
+          completed += count;
+        } else if (stat.enrichmentStatus === 'enriching') {
+          inProgress += count;
+        }
+      });
+
+      return { total, completed, inProgress };
+    }
+
+    const stats = await prisma.booking.groupBy({
+      by: ['enrichmentStatus'],
+      where: {
+        userId,
+        createdAt: {
+          gte: currentSession.startedAt // Only bookings from current scan session
+        }
+      },
+      _count: {
+        id: true
+      }
+    });
+
+    let total = 0;
+    let completed = 0;
+    let inProgress = 0;
+
+    stats.forEach(stat => {
+      const count = stat._count?.id || 0;
+      total += count;
+
+      if (['completed', 'upcoming', 'cancelled'].includes(stat.enrichmentStatus)) {
+        completed += count;
+      } else if (stat.enrichmentStatus === 'enriching') {
+        inProgress += count;
+      }
+      // Note: 'scanning' status bookings are counted in total but not in completed/inProgress
+      // This is intentional - they haven't started enrichment yet
+    });
+
+    return { total, completed, inProgress };
+  }
+
+  /**
+   * Set up listener for booking enrichment events
+   */
+  private setupEnrichmentListener(): void {
+    bookingUpdateEmitter.on('booking_update', async (eventData: any) => {
+      // Only listen for enrichment events
+      if (eventData.eventType === 'enriched') {
+        console.log(`🔔 Received enrichment event for user ${eventData.userId}, booking ${eventData.bookingId}`);
+
+        // DISABLED: Old individual enrichment stats - now using batch enrichment only
+        // Update enrichment stats for this user's session
+        // await this.updateEnrichmentStats(eventData.userId).catch(err => {
+        //   console.warn(`⚠️ Failed to update enrichment stats for user ${eventData.userId}:`, err?.message);
+        // });
+      }
+    });
+
+    console.log('🎧 Set up enrichment event listener for session progress updates');
+  }
+
+  /**
+   * Update enrichment stats for a session
+   */
+  async updateEnrichmentStats(userId: number): Promise<void> {
+    let session: EnhancedSessionStatus | undefined | null = this.memoryCache.get(userId);
+
+    // If session not in memory, try to restore from database
+    if (!session) {
+      console.log(`🔍 [DEBUG] No session found in memory for user ${userId}, attempting to restore from database...`);
+      session = await this.getSession(userId);
+
+      if (!session) {
+        console.log(`🔍 [DEBUG] No active session found for user ${userId} in updateEnrichmentStats`);
+        return;
+      }
+
+      console.log(`🔄 Restored session ${session.id} for enrichment stats update`);
+    }
+
+    const stats = await this.calculateEnrichmentStats(userId);
+    console.log(`🔍 [DEBUG] Enrichment stats for user ${userId}:`, stats);
+    session.enrichmentTotal = stats.total;
+    session.enrichmentCompleted = stats.completed;
+    session.enrichmentInProgress = stats.inProgress;
+    session.lastUpdateAt = new Date();
+
+    // Broadcast enrichment progress via WebSocket
+    // Only send enrichment data as an update, don't override main progress
+    if (wsManager && stats.total > 0) {
+      const enrichmentUpdate = {
+        // Only add enrichment data - don't touch main status/message/progress
+        enrichment: {
+          total: stats.total,
+          completed: stats.completed,
+          inProgress: stats.inProgress,
+          percentage: stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0,
+          status: stats.completed >= stats.total ? 'completed' : 'processing',
+          message: `🧠 Enriching: ${stats.completed}/${stats.total} bookings completed${stats.inProgress > 0 ? ` (${stats.inProgress} in progress...)` : ''}`
+        }
+      };
+
+      console.log(`🔍 [DEBUG] Broadcasting enrichment-only update:`, enrichmentUpdate);
+      wsManager.broadcastScanProgress(userId, enrichmentUpdate);
+    } else {
+      console.log(`🔍 [DEBUG] Not broadcasting enrichment - wsManager: ${!!wsManager}, stats.total: ${stats.total}`);
+    }
+
+    // Emit event for real-time updates
+    this.emit('progress', userId, session);
   }
 }
 
