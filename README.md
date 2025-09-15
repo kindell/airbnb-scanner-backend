@@ -265,6 +265,14 @@ The system provides comprehensive logging:
 
 ## 📝 Recent Updates
 
+### v2.1.0 - ML Performance & Reliability (September 2024)
+- ✅ **Circuit Breaker Pattern**: Intelligent failure handling in ML worker pool
+- ✅ **Resource Management**: Memory limits (512MB per worker) and process optimization
+- ✅ **Batch Processing Improvements**: Reduced batch size to 20 emails for better performance
+- ✅ **Duplicate Prevention**: Track enriched bookings to prevent redundant processing
+- ✅ **Two-Phase Enrichment**: Pre-scan batches for accurate progress reporting
+- ✅ **Railway Deployment Fix**: Improved Dockerfile for reliable container builds
+
 ### v2.0.0 - EmailProcessor Refactoring
 - ✅ Unified email processing architecture
 - ✅ Inline enrichment during scanning
@@ -273,11 +281,18 @@ The system provides comprehensive logging:
 - ✅ Improved error handling and logging
 - ✅ Better date parsing and conversion
 
+### Performance Improvements
+- ML worker pool now handles failures gracefully with automatic circuit breaking
+- Reduced memory footprint through better process management
+- More accurate progress tracking with pre-scanning phase
+- Optimized batch sizes for Gmail API rate limits
+
 ### Bug Fixes
 - Fixed progress bar not showing during enrichment
 - Resolved timeout issues with long-running scans
 - Corrected date parsing for 2025/2026 bookings
 - Fixed scanning status API for server restarts
+- Eliminated duplicate enrichment processing
 
 ## 📄 License
 

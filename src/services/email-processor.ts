@@ -512,13 +512,14 @@ export class EmailProcessor {
 
         // Broadcast enrichment progress via WebSocket
         if (wsManager) {
+          const mlStats = MLEmailParser.getWorkerStats();
           wsManager.broadcastScanProgress(this.userId, {
             enrichment: {
               total: progress.totalBookings,
               completed: progress.bookingsEnriched,
-              inProgress: Math.max(0, progress.currentEmail - progress.bookingsEnriched),
+              inProgress: mlStats.workersBusy + mlStats.queueLength,
               percentage: Math.round((progress.bookingsEnriched / progress.totalBookings) * 100),
-              message: `🧠 Enriching: ${progress.bookingsEnriched}/${progress.totalBookings} bookings completed${progress.currentEmail > progress.bookingsEnriched ? ` (${progress.currentEmail - progress.bookingsEnriched} in progress...)` : ''}`
+              message: `🧠 Enriching: ${progress.bookingsEnriched}/${progress.totalBookings} bookings completed`
             }
           });
         }

@@ -43,7 +43,8 @@ export interface BatchEnrichmentProgress {
 
 export class BatchEnrichmentService {
   private readonly BATCH_SIZE = 12; // Optimal batch size based on POC
-  private readonly MAX_RESULTS_PER_BATCH = 100; // Gmail API limit safety
+  private readonly MAX_RESULTS_PER_BATCH = 20; // Limit emails per batch for performance
+  private enrichedBookings: Set<string> = new Set(); // Track unique booking codes that have been enriched
 
   constructor(
     private gmailClient: GmailClient,
@@ -59,6 +60,9 @@ export class BatchEnrichmentService {
     onProgress?: (progress: BatchEnrichmentProgress) => void
   ): Promise<BatchEnrichmentResult> {
     const startTime = Date.now();
+
+    // Reset enriched bookings tracker
+    this.enrichedBookings.clear();
 
     console.log(`🚀 [BATCH ENRICHMENT] Starting batch enrichment for ${bookingCodes.length} booking codes`);
 
@@ -89,7 +93,34 @@ export class BatchEnrichmentService {
         totalBookings: bookingCodes.length
       });
 
-      // Processar varje batch sekventiellt för att undvika rate limits
+      // First pass: collect all emails to get accurate totals
+      let totalEmailsToProcess = 0;
+      const batchEmailLists: string[][] = [];
+
+      console.log(`🔍 [BATCH ENRICHMENT] Pre-scanning batches to get total email count...`);
+
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+
+        // Create query for this batch - exclude confirmation emails already processed
+        const query = `("${batch.join('" OR "')}") AND (from:automated@airbnb.com OR from:noreply@airbnb.com OR from:express@airbnb.com) AND NOT (subject:bekräftelse OR subject:confirmation OR subject:bekräftar)`;
+
+        // Get emails for this batch
+        const emailIds = await gmailRateLimiter.queueRequest(() =>
+          this.gmailClient.searchEmails(query, this.MAX_RESULTS_PER_BATCH)
+        );
+
+        batchEmailLists.push(emailIds);
+        totalEmailsToProcess += emailIds.length;
+
+        console.log(`   📧 Batch ${batchIndex + 1}: ${emailIds.length} emails`);
+      }
+
+      console.log(`📊 [BATCH ENRICHMENT] Total emails to process: ${totalEmailsToProcess}`);
+
+      // Now process each batch with accurate global progress
+      let globalEmailsProcessedSoFar = 0;
+
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
         const batch = batches[batchIndex];
 
@@ -99,17 +130,36 @@ export class BatchEnrichmentService {
           phase: 'searching',
           currentBatch: batchIndex + 1,
           totalBatches: batches.length,
-          currentEmail: 0,
-          totalEmails: 0,
-          bookingsEnriched: result.totalEmailsProcessed,
+          currentEmail: globalEmailsProcessedSoFar,
+          totalEmails: totalEmailsToProcess,
+          bookingsEnriched: this.enrichedBookings.size,
           totalBookings: bookingCodes.length
         });
 
         try {
-          const batchResult = await this.processBatch(batch, batchIndex + 1, onProgress);
+          // Pass global progress counters and email IDs to processBatch
+          const batchResult = await this.processBatch(
+            batch,
+            batchIndex + 1,
+            (progress) => {
+              // Update progress with global email positioning and booking-based enrichment count
+              const adjustedProgress = {
+                ...progress,
+                currentEmail: globalEmailsProcessedSoFar + progress.currentEmail,
+                totalEmails: totalEmailsToProcess,
+                bookingsEnriched: this.enrichedBookings.size
+              };
+              onProgress?.(adjustedProgress);
+            },
+            result.totalEmailsProcessed,
+            globalEmailsProcessedSoFar,
+            batchEmailLists[batchIndex],
+            bookingCodes.length
+          );
 
           result.totalEmailsFound += batchResult.emailsFound;
           result.totalEmailsProcessed += batchResult.emailsProcessed;
+          globalEmailsProcessedSoFar += batchEmailLists[batchIndex].length;
           result.batchesProcessed++;
 
           console.log(`✅ [BATCH ENRICHMENT] Batch ${batchIndex + 1} completed: ${batchResult.emailsFound} emails found, ${batchResult.emailsProcessed} processed`);
@@ -118,6 +168,7 @@ export class BatchEnrichmentService {
           const errorMsg = `Batch ${batchIndex + 1} failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
           console.error(`❌ [BATCH ENRICHMENT] ${errorMsg}`);
           result.errors.push(errorMsg);
+          globalEmailsProcessedSoFar += batchEmailLists[batchIndex].length; // Still advance counter on error
         }
 
         // Rate limiting delay mellan batches
@@ -144,7 +195,7 @@ export class BatchEnrichmentService {
       totalBatches: result.totalBatches,
       currentEmail: result.totalEmailsFound,
       totalEmails: result.totalEmailsFound,
-      bookingsEnriched: result.totalEmailsProcessed,
+      bookingsEnriched: this.enrichedBookings.size,
       totalBookings: bookingCodes.length
     });
 
@@ -152,48 +203,61 @@ export class BatchEnrichmentService {
   }
 
   /**
-   * Processar en batch av bokningskoder
+   * Processar en batch av bokningskoder med redan hämtade emails
    */
   private async processBatch(
     bookingCodes: string[],
     batchNumber: number,
-    onProgress?: (progress: BatchEnrichmentProgress) => void
+    onProgress?: (progress: BatchEnrichmentProgress) => void,
+    globalEmailsProcessed: number = 0,
+    globalEmailsFound: number = 0,
+    emailIds?: string[],
+    totalBookings: number = bookingCodes.length
   ): Promise<{ emailsFound: number; emailsProcessed: number }> {
 
-    // Skapa parenthesized OR query (enligt POC)
-    const query = `("${bookingCodes.join('" OR "')}") AND (from:automated@airbnb.com OR from:noreply@airbnb.com OR from:express@airbnb.com)`;
+    // Fetch emails if not provided (fallback for existing functionality)
+    let batchEmailIds = emailIds;
+    if (!batchEmailIds) {
+      // Skapa parenthesized OR query (enligt POC)
+      const query = `("${bookingCodes.join('" OR "')}") AND (from:automated@airbnb.com OR from:noreply@airbnb.com OR from:express@airbnb.com)`;
 
-    console.log(`   🔍 [BATCH ${batchNumber}] Query: ${query}`);
+      console.log(`   🔍 [BATCH ${batchNumber}] Query: ${query}`);
 
-    // Utför batch-sökning
-    const emailIds = await gmailRateLimiter.queueRequest(() =>
-      this.gmailClient.searchEmails(query, this.MAX_RESULTS_PER_BATCH)
-    );
+      // Utför batch-sökning
+      batchEmailIds = await gmailRateLimiter.queueRequest(() =>
+        this.gmailClient.searchEmails(query, this.MAX_RESULTS_PER_BATCH)
+      );
+    }
 
-    console.log(`   📧 [BATCH ${batchNumber}] Found ${emailIds.length} emails`);
+    console.log(`   📧 [BATCH ${batchNumber}] Processing ${batchEmailIds.length} emails`);
 
-    if (emailIds.length === 0) {
+    if (batchEmailIds.length === 0) {
       return { emailsFound: 0, emailsProcessed: 0 };
     }
 
     // Processar varje email
     let emailsProcessed = 0;
 
-    for (let emailIndex = 0; emailIndex < emailIds.length; emailIndex++) {
-      const emailId = emailIds[emailIndex];
-
-      onProgress?.({
-        phase: 'processing',
-        currentBatch: batchNumber,
-        totalBatches: 0, // Will be set by caller
-        currentEmail: emailIndex + 1,
-        totalEmails: emailIds.length,
-        bookingsEnriched: emailsProcessed,
-        totalBookings: bookingCodes.length
-      });
+    for (let emailIndex = 0; emailIndex < batchEmailIds.length; emailIndex++) {
+      const emailId = batchEmailIds[emailIndex];
 
       try {
-        const processed = await this.processEmail(emailId, bookingCodes);
+        // Report progress while ML processing is active
+        const processEmailWithProgress = async () => {
+          onProgress?.({
+            phase: 'processing',
+            currentBatch: batchNumber,
+            totalBatches: 0, // Will be set by caller
+            currentEmail: emailIndex + 1,
+            totalEmails: batchEmailIds.length,
+            bookingsEnriched: this.enrichedBookings.size,
+            totalBookings: totalBookings
+          });
+
+          return await this.processEmail(emailId, bookingCodes);
+        };
+
+        const processed = await processEmailWithProgress();
         if (processed) {
           emailsProcessed++;
         }
@@ -202,7 +266,7 @@ export class BatchEnrichmentService {
       }
     }
 
-    return { emailsFound: emailIds.length, emailsProcessed };
+    return { emailsFound: batchEmailIds.length, emailsProcessed };
   }
 
   /**
@@ -261,6 +325,10 @@ export class BatchEnrichmentService {
         console.log(`   ⚠️ Email ${emailId} belongs to ${parsedData.bookingCode}, not in current batch`);
         return false;
       }
+
+      // Mark this booking as enriched (we found an email for it, regardless of whether we process it)
+      this.enrichedBookings.add(parsedData.bookingCode);
+      console.log(`   ✅ Marked ${parsedData.bookingCode} as enriched (${this.enrichedBookings.size} total)`);
 
       // Skip booking_confirmation och booking_reminder under enrichment
       if (parsedData.emailType === 'booking_confirmation' || parsedData.emailType === 'booking_reminder') {

@@ -42,6 +42,13 @@ export class MLWorkerPool extends EventEmitter {
   private readonly WORKER_RESTART_THRESHOLD = 100; // Restart worker after N tasks
   private readonly MAX_QUEUE_SIZE = 1000;
 
+  // Circuit breaker configuration
+  private circuitBreakerOpen = false;
+  private consecutiveFailures = 0;
+  private readonly MAX_CONSECUTIVE_FAILURES = 5;
+  private readonly CIRCUIT_BREAKER_RESET_TIME = 60000; // 1 minute
+  private lastFailureTime = 0;
+
   constructor(poolSize: number = 3) {
     super();
     this.poolSize = poolSize;
@@ -80,10 +87,20 @@ export class MLWorkerPool extends EventEmitter {
     try {
       console.log(`🔨 Creating ML worker ${id}...`);
       
-      // Spawn Python process in worker mode with unbuffered output
+      // Spawn Python process in worker mode with unbuffered output and resource limits
       const childProcess = spawn('python3', ['-u', this.pythonScript, '--worker-mode'], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, PYTHONUNBUFFERED: '1' }
+        env: {
+          ...process.env,
+          PYTHONUNBUFFERED: '1',
+          // Limit Python memory usage to 512MB per worker
+          MALLOC_TRIM_THRESHOLD_: '100000',
+          PYTHONHASHSEED: '0'  // Deterministic hash for better memory behavior
+        },
+        // Set process limits
+        detached: false,
+        uid: process.getuid?.(),
+        gid: process.getgid?.()
       });
       
       const worker: MLWorker = {
@@ -118,12 +135,12 @@ export class MLWorkerPool extends EventEmitter {
     proc.on('close', (code) => {
       console.log(`💀 ML worker ${id} closed with code ${code}`);
       worker.status = 'dead';
-      
-      // Restart worker if not shutting down
-      if (!this.isShuttingDown) {
-        console.log(`🔄 Restarting ML worker ${id}...`);
-        setTimeout(() => this.restartWorker(id), 1000);
-      }
+
+      // Temporary: Disable auto-restart to prevent death spiral
+      // if (!this.isShuttingDown) {
+      //   console.log(`🔄 Restarting ML worker ${id}...`);
+      //   setTimeout(() => this.restartWorker(id), 1000);
+      // }
     });
     
     proc.on('error', (error) => {
@@ -201,15 +218,40 @@ export class MLWorkerPool extends EventEmitter {
    * Submit a task to the worker pool
    */
   async classifyEmail(
-    subject: string, 
-    sender: string, 
-    body: string, 
+    subject: string,
+    sender: string,
+    body: string,
     emailDate?: string
   ): Promise<any> {
     return new Promise((resolve, reject) => {
+      // Check circuit breaker
+      if (this.circuitBreakerOpen) {
+        const timeSinceLastFailure = Date.now() - this.lastFailureTime;
+        if (timeSinceLastFailure < this.CIRCUIT_BREAKER_RESET_TIME) {
+          reject(new Error('ML Worker Pool circuit breaker is open - system recovering'));
+          return;
+        } else {
+          // Try to reset circuit breaker
+          this.circuitBreakerOpen = false;
+          this.consecutiveFailures = 0;
+          console.log('🔄 Circuit breaker reset - attempting to process tasks');
+        }
+      }
+
       // Check queue size
       if (this.taskQueue.length >= this.MAX_QUEUE_SIZE) {
+        this.recordFailure();
         reject(new Error('ML Worker Pool queue is full'));
+        return;
+      }
+
+      // Check if any workers are available
+      const availableWorkers = Array.from(this.workers.values())
+        .filter(w => w.status === 'ready' || w.status === 'busy');
+
+      if (availableWorkers.length === 0) {
+        this.recordFailure();
+        reject(new Error('No ML workers available'));
         return;
       }
       
@@ -336,12 +378,15 @@ export class MLWorkerPool extends EventEmitter {
     worker.busy = false;
     worker.status = 'ready';
     worker.tasksCompleted++;
-    
+
+    // Reset circuit breaker on successful task
+    this.consecutiveFailures = 0;
+
     console.log(`✅ Task ${task.id} completed by worker ${worker.id} (${worker.tasksCompleted} total)`);
-    
+
     task.resolve(result);
     this.emit('task_completed', { task, worker, result });
-    
+
     // Restart worker if it has completed too many tasks
     if (worker.tasksCompleted >= this.WORKER_RESTART_THRESHOLD) {
       console.log(`🔄 Restarting worker ${worker.id} after ${worker.tasksCompleted} tasks`);
@@ -355,11 +400,27 @@ export class MLWorkerPool extends EventEmitter {
   private handleWorkerTaskError(worker: MLWorker, task: MLTask, error: Error): void {
     worker.busy = false;
     worker.status = 'error';
-    
+
+    // Record failure for circuit breaker
+    this.recordFailure();
+
     console.error(`❌ Task ${task.id} failed on worker ${worker.id}:`, error.message);
-    
+
     task.reject(error);
     this.emit('task_failed', { task, worker, error });
+  }
+
+  /**
+   * Record a failure for circuit breaker logic
+   */
+  private recordFailure(): void {
+    this.consecutiveFailures++;
+    this.lastFailureTime = Date.now();
+
+    if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
+      this.circuitBreakerOpen = true;
+      console.log(`🚨 Circuit breaker OPEN after ${this.consecutiveFailures} consecutive failures`);
+    }
   }
 
   /**
@@ -374,7 +435,9 @@ export class MLWorkerPool extends EventEmitter {
       workersBusy: workers.filter(w => w.busy).length,
       workersError: workers.filter(w => w.status === 'error').length,
       queueLength: this.taskQueue.length,
-      totalTasksCompleted: workers.reduce((sum, w) => sum + w.tasksCompleted, 0)
+      totalTasksCompleted: workers.reduce((sum, w) => sum + w.tasksCompleted, 0),
+      circuitBreakerOpen: this.circuitBreakerOpen,
+      consecutiveFailures: this.consecutiveFailures
     };
   }
 

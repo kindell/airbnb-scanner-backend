@@ -64,6 +64,20 @@ export class MLEmailParser {
   }
 
   /**
+   * Get ML worker pool stats
+   */
+  static getWorkerStats() {
+    return MLEmailParser.workerPool?.getStats() || {
+      poolSize: 0,
+      workersReady: 0,
+      workersBusy: 0,
+      workersError: 0,
+      queueLength: 0,
+      totalTasksCompleted: 0
+    };
+  }
+
+  /**
    * Shutdown the shared worker pool (called during app shutdown)
    */
   static async shutdown(): Promise<void> {
