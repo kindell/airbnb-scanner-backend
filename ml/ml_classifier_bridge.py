@@ -122,6 +122,64 @@ class MLClassifierBridge:
             
         return False
 
+def worker_mode():
+    """Run in persistent worker mode for ML Worker Pool"""
+    
+    # Check if model exists
+    model_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'airbnb_email_classifier.pkl')
+    if not os.path.exists(model_file):
+        print(json.dumps({"error": "ML model not found"}), file=sys.stderr)
+        sys.exit(1)
+    
+    # Initialize bridge once (expensive operation)
+    bridge = MLClassifierBridge()
+    
+    # Signal ready to Node.js (force to stdout with explicit buffering control)
+    sys.stdout.write("READY\n")
+    sys.stdout.flush()
+    sys.stderr.write("Worker ready signal sent\n")
+    sys.stderr.flush()
+    
+    # Process tasks from stdin continuously
+    try:
+        while True:
+            line = sys.stdin.readline()
+            if not line:  # EOF, worker should exit
+                break
+                
+            line = line.strip()
+            if not line:  # Empty line, skip
+                continue
+                
+            try:
+                # Parse task data
+                input_data = json.loads(line)
+                
+                subject = input_data.get('subject', '')
+                sender = input_data.get('sender', '')
+                body = input_data.get('body', '')
+                email_date = input_data.get('emailDate', None)
+                
+                # Use bridge to classify and extract
+                result = bridge.classify_and_extract(subject, sender, body, email_date)
+                
+                # Output result as JSON with newline terminator
+                print(json.dumps(result))
+                sys.stdout.flush()
+                
+            except Exception as e:
+                # Send error response
+                error_result = {"error": str(e)}
+                print(json.dumps(error_result))
+                sys.stdout.flush()
+                
+    except KeyboardInterrupt:
+        # Graceful shutdown
+        sys.exit(0)
+    except Exception as e:
+        print(json.dumps({"error": f"Worker error: {str(e)}"}), file=sys.stderr)
+        sys.exit(1)
+
 def main():
     """Main function for command-line usage (same interface as classify_email.py)"""
     
@@ -157,4 +215,8 @@ def main():
         sys.exit(1)
 
 if __name__ == '__main__':
-    main()
+    # Check for worker mode argument
+    if len(sys.argv) > 1 and sys.argv[1] == '--worker-mode':
+        worker_mode()
+    else:
+        main()

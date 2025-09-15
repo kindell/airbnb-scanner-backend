@@ -17,6 +17,7 @@ import { decodeGmailContent, decodeGmailContentForML } from './email-decoder';
 import { EmailLinkManager } from './email-link-manager';
 import { BookingDataMerger } from './booking-data-merger';
 import { bookingUpdateEmitter } from './booking-update-emitter';
+import { gmailRateLimiter } from './gmail-rate-limiter';
 // Email content extraction will be handled inline
 
 export interface EnrichmentResult {
@@ -153,8 +154,7 @@ export class BookingEnricher {
       const result = await this.enrichBooking(booking.bookingCode);
       results.push(result);
       
-      // Lite paus för att inte överbelasta Gmail API
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Rate limiting now handled by GmailRateLimiter, no need for manual pauses
     }
     
     return results;
@@ -163,7 +163,7 @@ export class BookingEnricher {
   /**
    * Enrichera en specifik bokning genom att söka alla relaterade mejl
    */
-  async enrichBooking(bookingCode: string): Promise<EnrichmentResult> {
+  async enrichBooking(bookingCode: string, signal?: AbortSignal): Promise<EnrichmentResult> {
     console.log(`🔍 Enriching booking: ${bookingCode}`);
     
     const result: EnrichmentResult = {
@@ -177,11 +177,18 @@ export class BookingEnricher {
     };
 
     try {
+      // Check if operation was cancelled
+      if (signal?.aborted) {
+        throw new Error('Enrichment cancelled');
+      }
+      
       // Sök ALLA mejl för denna bokningskod utan år-begränsning
       const query = `${bookingCode} (from:automated@airbnb.com OR from:noreply@airbnb.com OR from:express@airbnb.com)`;
       console.log(`   Query: ${query}`);
       
-      const emailIds = await this.gmailClient.searchEmails(query, 20);
+      const emailIds = await gmailRateLimiter.queueRequest(() => 
+        this.gmailClient.searchEmails(query, 20, signal)
+      , signal);
       result.emailsFound = emailIds.length;
       
       if (emailIds.length === 0) {
@@ -218,9 +225,16 @@ export class BookingEnricher {
             continue;
           }
 
+          // Check if operation was cancelled
+          if (signal?.aborted) {
+            throw new Error('Enrichment cancelled');
+          }
+          
           // Hämta och parsa mejl
           console.log(`   📥 Fetching email ${emailId} via Gmail API...`);
-          const email = await this.gmailClient.getEmail(emailId);
+          const email = await gmailRateLimiter.queueRequest(() => 
+            this.gmailClient.getEmail(emailId, signal)
+          , signal);
           console.log(`   ✅ Gmail API success for ${emailId}: ${email ? 'got email data' : 'NO DATA'}`);
           
           // Extrahera råinnehåll för ML-parsern
@@ -292,7 +306,7 @@ export class BookingEnricher {
 
       // Fas 2: Change Detection - Sök efter ändrings-sekvenser
       console.log(`   🔄 Phase 2: Change detection for ${bookingCode}`);
-      const changeDetectionResult = await this.detectAndProcessChanges(bookingCode);
+      const changeDetectionResult = await this.detectAndProcessChanges(bookingCode, signal);
       result.changeDetected = changeDetectionResult.changeDetected;
       if (changeDetectionResult.error) {
         result.errors.push(changeDetectionResult.error);
@@ -300,7 +314,7 @@ export class BookingEnricher {
 
       // Fas 3: Payout-based date correction - Final verification
       console.log(`   💰 Phase 3: Payout-based date correction for ${bookingCode}`);
-      const payoutCorrectionResult = await this.correctDatesFromPayout(bookingCode);
+      const payoutCorrectionResult = await this.correctDatesFromPayout(bookingCode, signal);
       result.payoutCorrected = payoutCorrectionResult.corrected;
       if (payoutCorrectionResult.error) {
         result.errors.push(payoutCorrectionResult.error);
@@ -472,15 +486,22 @@ export class BookingEnricher {
     if (mergedData.gmailId !== undefined) updateData.gmailId = mergedData.gmailId;
     if (mergedData.gmailThreadId !== undefined) updateData.gmailThreadId = mergedData.gmailThreadId;
 
-    const updatedBooking = await prisma.booking.update({
-      where: {
-        userId_bookingCode: {
-          userId: this.userId,
-          bookingCode: parsedData.bookingCode
-        }
-      },
-      data: updateData
-    });
+    let updatedBooking;
+    try {
+      updatedBooking = await prisma.booking.update({
+        where: {
+          userId_bookingCode: {
+            userId: this.userId,
+            bookingCode: parsedData.bookingCode
+          }
+        },
+        data: updateData
+      });
+      console.log(`     ✅ Database update successful for ${parsedData.bookingCode} - status: ${updatedBooking.status}`);
+    } catch (prismaError: any) {
+      console.error(`     ❌ Prisma update error for ${parsedData.bookingCode}:`, prismaError.message);
+      throw new Error(`Database update failed for ${parsedData.bookingCode}: ${prismaError.message}`);
+    }
 
     // Save email link with proper type detection
     if (gmailId && updatedBooking) {
@@ -560,7 +581,7 @@ export class BookingEnricher {
   /**
    * Phase 2: Detect and process booking changes using already fetched emails
    */
-  private async detectAndProcessChanges(bookingCode: string): Promise<{ changeDetected: boolean; error?: string }> {
+  private async detectAndProcessChanges(bookingCode: string, signal?: AbortSignal): Promise<{ changeDetected: boolean; error?: string }> {
     try {
       // Sök efter redan sparade emails för denna bokning
       const booking = await prisma.booking.findUnique({
@@ -604,7 +625,9 @@ export class BookingEnricher {
       for (const changeRequest of changeRequests) {
         try {
           // Hämta mejlet och parsa för originaldata och nya datum
-          const email = await this.gmailClient.getEmail(changeRequest.gmailId);
+          const email = await gmailRateLimiter.queueRequest(() => 
+            this.gmailClient.getEmail(changeRequest.gmailId, signal)
+          , signal);
           const rawContent = this.extractRawContent(email);
           const headers = this.extractEmailHeaders(email);
           
@@ -668,7 +691,7 @@ export class BookingEnricher {
   /**
    * Phase 3: Correct dates using payout emails as authoritative source (using already fetched emails)
    */
-  private async correctDatesFromPayout(bookingCode: string): Promise<{ corrected: boolean; error?: string }> {
+  private async correctDatesFromPayout(bookingCode: string, signal?: AbortSignal): Promise<{ corrected: boolean; error?: string }> {
     try {
       // Hitta payout-emails för denna bokning från redan sparade emails
       const booking = await prisma.booking.findUnique({
@@ -697,7 +720,9 @@ export class BookingEnricher {
       // Use ML parser to extract dates from payout emails (more reliable than regex)
       for (const payoutLink of booking.emailLinks) {
         try {
-          const email = await this.gmailClient.getEmail(payoutLink.gmailId);
+          const email = await gmailRateLimiter.queueRequest(() => 
+            this.gmailClient.getEmail(payoutLink.gmailId, signal)
+          , signal);
           const rawContent = this.extractRawContent(email);
           
           if (!rawContent) continue;

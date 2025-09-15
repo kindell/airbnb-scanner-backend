@@ -23,7 +23,8 @@
     "ml:train-and-test": "npm run ml:train && npm run ml:test",
     "ml:train": "cd ml && python3 train_classifier.py",
     "ml:validate": "node validate-ml-production.js",
-    "ml:validate:full": "node validate-ml-accuracy.js"
+    "ml:validate:full": "node validate-ml-accuracy.js",
+    "test-enrichment": "ts-node src/test/enrichment-debug.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.16.0",

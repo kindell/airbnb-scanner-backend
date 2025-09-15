@@ -26,14 +26,20 @@ COPY ml/ ./ml/
 # Install Python dependencies if requirements.txt exists
 RUN if [ -f ml/requirements.txt ]; then pip3 install --break-system-packages -r ml/requirements.txt; fi
 
-# Copy application code
-COPY . .
+# Copy TypeScript source files first
+COPY src/ ./src/
+COPY prisma/ ./prisma/
+COPY *.json ./
+COPY *.js ./
 
 # Generate Prisma client
 RUN npx prisma generate
 
 # Build TypeScript
 RUN npm run build
+
+# Copy remaining files
+COPY . .
 
 # Remove dev dependencies to reduce image size
 RUN npm prune --production

@@ -46,53 +46,160 @@ export class GmailClient {
   /**
    * Search for emails with query (with retry logic)
    */
-  async searchEmails(query: string, maxResults: number = 50): Promise<string[]> {
-    return this.retryWithBackoff(async () => {
-      const gmail = this.getGmail();
-      
-      const response = await gmail.users.messages.list({
-        userId: 'me',
-        q: query,
-        maxResults
-      });
+  async searchEmails(query: string, maxResults: number = 50, signal?: AbortSignal): Promise<string[]> {
+    return this.searchEmailsWithSignal(query, maxResults, signal);
+  }
 
-      return response.data.messages?.map(msg => msg.id!) || [];
-    }, `searchEmails("${query.substring(0, 50)}...")`);
+  /**
+   * Search for emails with AbortSignal support
+   */
+  private async searchEmailsWithSignal(query: string, maxResults: number, signal?: AbortSignal): Promise<string[]> {
+    const maxRetries = 3;
+    const baseDelay = 1000;
+    const operation = `searchEmails("${query.substring(0, 50)}...")`;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Check if operation was cancelled
+        if (signal?.aborted) {
+          throw new Error('Gmail search cancelled');
+        }
+        
+        const gmail = this.getGmail();
+        
+        const response = await gmail.users.messages.list({
+          userId: 'me',
+          q: query,
+          maxResults
+        });
+
+        return response.data.messages?.map(msg => msg.id!) || [];
+      } catch (error: any) {
+        // Check if operation was cancelled
+        if (signal?.aborted) {
+          throw new Error('Gmail search cancelled');
+        }
+        
+        // Handle authentication errors first
+        if (error.code === 401) {
+          console.log('🔄 Token expired, attempting refresh...');
+          await this.refreshTokens();
+          continue; // Retry with refreshed tokens
+        }
+
+        // Check if this is a retryable error
+        const isRetryable = 
+          error.code === 429 || // Rate limit
+          error.code === 503 || // Service unavailable
+          error.code === 502 || // Bad gateway
+          error.code === 500 || // Internal server error
+          error.code === 'ENOTFOUND' || // DNS issues
+          error.code === 'ECONNRESET' || // Connection reset
+          error.message?.includes('getaddrinfo ENOTFOUND'); // DNS resolution failed
+
+        if (!isRetryable || attempt === maxRetries) {
+          console.error(`❌ ${operation} failed after ${attempt} attempts:`, error.message);
+          throw error;
+        }
+
+        const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000; // Jitter
+        console.log(`⚠️ ${operation} failed (attempt ${attempt}/${maxRetries}): ${error.message}. Retrying in ${Math.round(delay)}ms...`);
+        
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    throw new Error('This should never be reached');
   }
 
   /**
    * Get full email by ID with retry logic for network issues
    */
-  async getEmail(messageId: string): Promise<GmailMessage> {
-    return this.retryWithBackoff(async () => {
-      const gmail = this.getGmail();
-      
-      // First try to get full format
-      const response = await gmail.users.messages.get({
-        userId: 'me',
-        id: messageId,
-        format: 'full'
-      });
+  async getEmail(messageId: string, signal?: AbortSignal): Promise<GmailMessage> {
+    return this.getEmailWithSignal(messageId, signal);
+  }
 
-      // If payload is empty or has no useful content, try raw format as fallback
-      const message = response.data as GmailMessage;
-      if (!message.payload?.body?.data && !message.payload?.parts) {
-        try {
-          const rawResponse = await gmail.users.messages.get({
-            userId: 'me',
-            id: messageId,
-            format: 'raw'
-          });
-          
-          // Combine full format with raw data for content extraction
-          (message as any).raw = rawResponse.data.raw;
-        } catch (rawError) {
-          console.log('Could not fetch raw format, using full format only');
+  /**
+   * Get email with AbortSignal support
+   */
+  private async getEmailWithSignal(messageId: string, signal?: AbortSignal): Promise<GmailMessage> {
+    const maxRetries = 3;
+    const baseDelay = 1000;
+    const operation = `getEmail(${messageId})`;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Check if operation was cancelled
+        if (signal?.aborted) {
+          throw new Error('Gmail getEmail cancelled');
         }
-      }
+        
+        const gmail = this.getGmail();
+        
+        // First try to get full format
+        const response = await gmail.users.messages.get({
+          userId: 'me',
+          id: messageId,
+          format: 'full'
+        });
 
-      return message;
-    }, `getEmail(${messageId})`);
+        // If payload is empty or has no useful content, try raw format as fallback
+        const message = response.data as GmailMessage;
+        if (!message.payload?.body?.data && !message.payload?.parts) {
+          try {
+            // Check if operation was cancelled before second request
+            if (signal?.aborted) {
+              throw new Error('Gmail getEmail cancelled');
+            }
+            
+            const rawResponse = await gmail.users.messages.get({
+              userId: 'me',
+              id: messageId,
+              format: 'raw'
+            });
+            
+            // Combine full format with raw data for content extraction
+            (message as any).raw = rawResponse.data.raw;
+          } catch (rawError) {
+            console.log('Could not fetch raw format, using full format only');
+          }
+        }
+
+        return message;
+      } catch (error: any) {
+        // Check if operation was cancelled
+        if (signal?.aborted) {
+          throw new Error('Gmail getEmail cancelled');
+        }
+        
+        // Handle authentication errors first
+        if (error.code === 401) {
+          console.log('🔄 Token expired, attempting refresh...');
+          await this.refreshTokens();
+          continue; // Retry with refreshed tokens
+        }
+
+        // Check if this is a retryable error
+        const isRetryable = 
+          error.code === 429 || // Rate limit
+          error.code === 503 || // Service unavailable
+          error.code === 502 || // Bad gateway
+          error.code === 500 || // Internal server error
+          error.code === 'ENOTFOUND' || // DNS issues
+          error.code === 'ECONNRESET' || // Connection reset
+          error.message?.includes('getaddrinfo ENOTFOUND'); // DNS resolution failed
+
+        if (!isRetryable || attempt === maxRetries) {
+          console.error(`❌ ${operation} failed after ${attempt} attempts:`, error.message);
+          throw error;
+        }
+
+        const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000; // Jitter
+        console.log(`⚠️ ${operation} failed (attempt ${attempt}/${maxRetries}): ${error.message}. Retrying in ${Math.round(delay)}ms...`);
+        
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    throw new Error('This should never be reached');
   }
 
   /**
@@ -102,12 +209,23 @@ export class GmailClient {
     fn: () => Promise<T>,
     operation: string,
     maxRetries: number = 3,
-    baseDelay: number = 1000
+    baseDelay: number = 1000,
+    signal?: AbortSignal
   ): Promise<T> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
+        // Check if operation was cancelled
+        if (signal?.aborted) {
+          throw new Error(`${operation} cancelled`);
+        }
+        
         return await fn();
       } catch (error: any) {
+        // Check if operation was cancelled
+        if (signal?.aborted) {
+          throw new Error(`${operation} cancelled`);
+        }
+        
         // Handle authentication errors first
         if (error.code === 401) {
           console.log('🔄 Token expired, attempting refresh...');
@@ -153,7 +271,7 @@ export class GmailClient {
     }
 
     console.log(`🔍 OPTIMIZED search - booking confirmations only: ${query}`);
-    return this.searchEmails(query, 500);
+    return this.searchEmails(query, 500, undefined);
   }
 
   /**
@@ -168,7 +286,7 @@ export class GmailClient {
     }
 
     console.log(`💰 Searching Gmail for payouts: ${query}`);
-    return this.searchEmails(query, 200);
+    return this.searchEmails(query, 200, undefined);
   }
 
   /**
@@ -184,7 +302,7 @@ export class GmailClient {
     }
 
     console.log(`💳 Searching Gmail for payout notifications with booking codes: ${query}`);
-    return this.searchEmails(query, 500);
+    return this.searchEmails(query, 500, undefined);
   }
 
   /**
@@ -262,7 +380,7 @@ export class GmailClient {
         broadQuery += ` after:${year}/1/1 before:${year}/12/31`;
       }
       
-      const broadEmails = await this.searchEmails(broadQuery, 1000);
+      const broadEmails = await this.searchEmails(broadQuery, 1000, undefined);
       searchResults.push({
         strategy: 'Broad Airbnb Search',
         query: broadQuery,

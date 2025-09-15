@@ -20,9 +20,9 @@ export const DEFAULT_PARALLEL_CONFIG: ParallelProcessingConfig = {
 // Aggressive configuration for faster processing (use with caution)
 export const AGGRESSIVE_PARALLEL_CONFIG: ParallelProcessingConfig = {
   enabled: true,
-  batchSize: 25,             // Process 25 emails concurrently
+  batchSize: 6,              // Process 6 emails concurrently (reduced from 10)
   delayMs: 50,               // 50ms delay between batches
-  maxConcurrency: 25         // Higher concurrency
+  maxConcurrency: 6          // Higher concurrency (reduced from 10)
 };
 
 // Conservative configuration for rate limit safety

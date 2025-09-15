@@ -3,6 +3,7 @@ import * as path from 'path';
 import { GmailEmailData, BookingData, PayoutData } from '../types';
 import { cleanEmailContent } from '../utils/html-cleaner';
 import { prisma } from '../database/client';
+import { MLWorkerPool } from '../services/MLWorkerPool';
 
 interface MLClassificationResult {
   emailType: 'booking_confirmation' | 'booking_reminder' | 'payout' | 'cancellation' | 'change_request' | 'modification';
@@ -43,11 +44,33 @@ interface MLClassificationResult {
 export class MLEmailParser {
   private pythonScript: string;
   private userId: number;
+  private static workerPool: MLWorkerPool | null = null;
 
   constructor(userId: number) {
     this.pythonScript = path.join(__dirname, '../../ml/ml_classifier_bridge.py');
     this.userId = userId;
-    console.log(`🐍 ML Parser using Python script: ${this.pythonScript}`);
+    console.log(`🐍 ML Parser using Worker Pool`);
+  }
+
+  /**
+   * Get or initialize the shared ML Worker Pool
+   */
+  private static async getWorkerPool(): Promise<MLWorkerPool> {
+    if (!MLEmailParser.workerPool) {
+      MLEmailParser.workerPool = new MLWorkerPool(3); // 3 workers with sequential initialization
+      await MLEmailParser.workerPool.initialize();
+    }
+    return MLEmailParser.workerPool;
+  }
+
+  /**
+   * Shutdown the shared worker pool (called during app shutdown)
+   */
+  static async shutdown(): Promise<void> {
+    if (MLEmailParser.workerPool) {
+      await MLEmailParser.workerPool.shutdown();
+      MLEmailParser.workerPool = null;
+    }
   }
 
   /**
@@ -117,12 +140,35 @@ export class MLEmailParser {
   }
 
   /**
-   * Classify and extract data from email using ML model
+   * Classify and extract data from email using ML Worker Pool
    */
   private async classifyEmail(subject: string, sender: string, body: string, emailDate?: string): Promise<MLClassificationResult | null> {
+    try {
+      const workerPool = await MLEmailParser.getWorkerPool();
+      
+      console.log(`🏊‍♂️ Using ML Worker Pool for classification`);
+      console.log(`📤 Processing email: ${subject.substring(0, 100)}... (${body.length} chars)`);
+      
+      const result = await workerPool.classifyEmail(subject, sender, body, emailDate);
+      
+      console.log('🔍 ML Worker Pool result:', JSON.stringify(result, null, 2));
+      return result;
+      
+    } catch (error) {
+      console.error('❌ ML Worker Pool error:', error);
+      
+      // Fallback to old method if worker pool fails
+      console.log('🔄 Falling back to spawn method...');
+      return this.classifyEmailFallback(subject, sender, body, emailDate);
+    }
+  }
+
+  /**
+   * Fallback method using spawn (original implementation)
+   */
+  private async classifyEmailFallback(subject: string, sender: string, body: string, emailDate?: string): Promise<MLClassificationResult | null> {
     return new Promise((resolve, reject) => {
-      console.log(`🐍 Spawning: python3 ${this.pythonScript}`);
-      console.log(`📂 Current working directory: ${process.cwd()}`);
+      console.log(`🐍 Spawning fallback: python3 ${this.pythonScript}`);
       const python = spawn('python3', [this.pythonScript]);
       
       let output = '';
@@ -137,7 +183,6 @@ export class MLEmailParser {
       };
 
       const jsonInput = JSON.stringify(emailData);
-      console.log(`📤 Sending to Python: ${jsonInput.substring(0, 200)}... (${jsonInput.length} chars)`);
       python.stdin.write(jsonInput);
       python.stdin.end();
 
@@ -151,26 +196,24 @@ export class MLEmailParser {
 
       python.on('close', (code) => {
         if (code !== 0) {
-          console.error('❌ ML classifier error:', errorOutput);
+          console.error('❌ ML classifier fallback error:', errorOutput);
           reject(new Error(`ML classifier failed with code ${code}: ${errorOutput}`));
           return;
         }
 
         try {
           const result = JSON.parse(output.trim());
-          console.log('🔍 ML Classifier raw output:', output.trim());
-          console.log('🔍 ML Classifier parsed result:', JSON.stringify(result, null, 2));
           resolve(result);
         } catch (error) {
-          console.error('❌ Failed to parse ML classifier output:', output);
+          console.error('❌ Failed to parse ML classifier fallback output:', output);
           reject(error);
         }
       });
 
-      // Timeout after 15 seconds (increased from 5 to handle rate limits)
+      // Timeout after 15 seconds
       setTimeout(() => {
         python.kill();
-        reject(new Error('ML classifier timeout'));
+        reject(new Error('ML classifier fallback timeout'));
       }, 15000);
     });
   }

@@ -1,108 +1,107 @@
 #!/usr/bin/env node
 /**
- * Rescan a specific booking via API - adapted from old system
+ * Standalone Rescan Script
+ * ========================
+ * 
+ * Usage: node rescan-booking.js <bookingCode>
+ * Example: node rescan-booking.js HMSFBXYYD2
  */
-const jwt = require('jsonwebtoken');
-const { PrismaClient } = require('@prisma/client');
-const http = require('http');
 
-const prisma = new PrismaClient();
+const { PrismaClient } = require('@prisma/client');
 
 async function rescanBooking(bookingCode) {
-  if (!bookingCode) {
-    console.error('❌ Please provide a booking code as argument');
-    console.log('Usage: node rescan-booking.js HM88YSNWWE');
-    process.exit(1);
-  }
-  
-  console.log(`🔄 Starting rescan for booking: ${bookingCode}`);
+  const prisma = new PrismaClient();
   
   try {
-    // Get user data
-    const user = await prisma.user.findFirst({
-      where: { email: 'jon@kindell.se' }
+    console.log(`🔄 Rescanning booking: ${bookingCode}`);
+    
+    // Get user (assuming user ID 1 for now)
+    const userId = 1;
+    const user = await prisma.user.findUnique({
+      where: { id: userId }
     });
     
     if (!user) {
-      console.error('❌ User not found!');
+      console.log(`❌ User ${userId} not found`);
       return;
     }
     
-    console.log(`✅ Found user: ${user.email}`);
-    
-    // Generate JWT token
-    const token = jwt.sign(
-      { 
-        userId: user.id,
-        email: user.email 
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '1h' }
-    );
-    
-    console.log('🔑 Generated JWT token');
-    
-    // API call to trigger rescan
-    const postData = JSON.stringify({
-      bookingCode: bookingCode,
-      forceRescan: true
+    // Check current booking status
+    const bookingBefore = await prisma.booking.findFirst({
+      where: { userId, bookingCode }
     });
     
-    const options = {
-      hostname: 'localhost',
-      port: 3000,
-      path: '/api/rescan-booking',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-        'Content-Length': Buffer.byteLength(postData)
-      }
-    };
-    
-    console.log(`📡 Calling API: POST ${options.hostname}:${options.port}${options.path}`);
-    
-    const req = http.request(options, (res) => {
-      let data = '';
+    if (bookingBefore) {
+      console.log(`📋 Current status: ${bookingBefore.status} (enrichment: ${bookingBefore.enrichmentStatus})`);
       
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-      
-      res.on('end', () => {
-        try {
-          const response = JSON.parse(data);
-          
-          if (res.statusCode === 200) {
-            console.log('✅ Rescan completed successfully!');
-            console.log('📊 Results:', response);
-          } else {
-            console.error(`❌ API Error (${res.statusCode}):`, response);
+      // Clear Gmail associations to allow reprocessing of emails (fixes issue where cancellations aren't detected)
+      if (bookingBefore.gmailId || bookingBefore.gmailThreadId) {
+        console.log(`🔄 Clearing Gmail associations to allow reprocessing of emails`);
+        await prisma.booking.update({
+          where: { 
+            userId_bookingCode: { userId, bookingCode } 
+          },
+          data: { 
+            enrichmentStatus: 'scanning',
+            gmailId: null,
+            gmailThreadId: null
           }
-        } catch (e) {
-          console.log(`📄 Raw response (${res.statusCode}):`, data);
-        }
-        
-        process.exit(res.statusCode === 200 ? 0 : 1);
-      });
+        });
+        console.log(`✅ Gmail associations cleared`);
+      }
+    } else {
+      console.log(`📋 Booking ${bookingCode} not found in database`);
+    }
+    
+    // Initialize Gmail client and enricher
+    const { GmailClient } = require('./src/utils/gmail-client');
+    const { BookingEnricher } = require('./src/utils/booking-enricher');
+    
+    const gmailClient = new GmailClient(user);
+    const enricher = new BookingEnricher(gmailClient, userId);
+    
+    // Run enrichment
+    console.log(`🚀 Running BookingEnricher...`);
+    const result = await enricher.enrichBooking(bookingCode);
+    
+    console.log(`✅ Enrichment completed: ${result.emailsProcessed}/${result.emailsFound} emails processed`);
+    
+    // Check final status
+    const bookingAfter = await prisma.booking.findFirst({
+      where: { userId, bookingCode }
     });
     
-    req.on('error', (error) => {
-      console.error('❌ Request error:', error.message);
-      process.exit(1);
-    });
-    
-    req.write(postData);
-    req.end();
+    if (bookingAfter) {
+      console.log(`📊 Final status: ${bookingAfter.status} (enrichment: ${bookingAfter.enrichmentStatus})`);
+      
+      if (bookingBefore && bookingBefore.status !== bookingAfter.status) {
+        console.log(`🔄 Status changed: ${bookingBefore.status} → ${bookingAfter.status}`);
+      }
+    } else {
+      console.log(`❌ Booking ${bookingCode} still not found after enrichment`);
+    }
     
   } catch (error) {
-    console.error('❌ Error:', error.message);
-    process.exit(1);
+    console.error(`❌ Error during rescan: ${error.message}`);
+    console.error(error);
   } finally {
     await prisma.$disconnect();
   }
 }
 
-// Parse command line argument
-const bookingCode = process.argv[2];
-rescanBooking(bookingCode);
+async function main() {
+  const args = process.argv.slice(2);
+  
+  if (args.length !== 1) {
+    console.log(`Usage: node rescan-booking.js <bookingCode>`);
+    console.log(`Example: node rescan-booking.js HMSFBXYYD2`);
+    process.exit(1);
+  }
+  
+  const bookingCode = args[0];
+  await rescanBooking(bookingCode);
+}
+
+if (require.main === module) {
+  main().catch(console.error);
+}

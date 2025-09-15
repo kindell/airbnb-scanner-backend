@@ -171,3 +171,34 @@ server.listen(PORT, () => {
     console.log(`🛠️  Development mode enabled`);
   }
 });
+
+// Graceful shutdown
+async function gracefulShutdown(signal: string) {
+  console.log(`\n🛑 Received ${signal}, starting graceful shutdown...`);
+  
+  try {
+    // Shutdown ML Worker Pool
+    const { MLEmailParser } = await import('./parsers/MLEmailParser');
+    await MLEmailParser.shutdown();
+    
+    // Close server
+    server.close(() => {
+      console.log(`✅ Server closed gracefully`);
+      process.exit(0);
+    });
+    
+    // Force exit after 30 seconds
+    setTimeout(() => {
+      console.log(`⚠️ Force exit after timeout`);
+      process.exit(1);
+    }, 30000);
+    
+  } catch (error) {
+    console.error(`❌ Error during shutdown:`, error);
+    process.exit(1);
+  }
+}
+
+// Handle shutdown signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
