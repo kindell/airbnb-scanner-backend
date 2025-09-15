@@ -165,7 +165,25 @@ export class BookingEnricher {
    */
   async enrichBooking(bookingCode: string, signal?: AbortSignal): Promise<EnrichmentResult> {
     console.log(`🔍 Enriching booking: ${bookingCode}`);
-    
+
+    // Mark booking as 'enriching' when we start processing it
+    try {
+      await prisma.booking.update({
+        where: {
+          userId_bookingCode: {
+            userId: this.userId,
+            bookingCode: bookingCode
+          }
+        },
+        data: {
+          enrichmentStatus: 'enriching'
+        }
+      });
+      console.log(`🔄 Marked ${bookingCode} as enriching`);
+    } catch (updateError: any) {
+      console.error(`❌ Failed to mark ${bookingCode} as enriching:`, updateError);
+    }
+
     const result: EnrichmentResult = {
       bookingCode,
       emailsFound: 0,
@@ -193,6 +211,27 @@ export class BookingEnricher {
       
       if (emailIds.length === 0) {
         console.log(`   ⚠️ No additional emails found for ${bookingCode}`);
+
+        // Still mark as completed even if no emails found
+        try {
+          await prisma.booking.update({
+            where: {
+              userId_bookingCode: {
+                userId: this.userId,
+                bookingCode: bookingCode
+              }
+            },
+            data: {
+              enrichmentStatus: 'completed',
+              enrichmentProgress: 0,
+              enrichmentTotal: 0
+            }
+          });
+          console.log(`✅ Marked ${bookingCode} as enrichment completed (no emails found)`);
+        } catch (updateError: any) {
+          console.error(`❌ Failed to update enrichmentStatus for ${bookingCode}:`, updateError);
+        }
+
         return result;
       }
 
@@ -359,6 +398,26 @@ export class BookingEnricher {
       }
     } catch (emitError: any) {
       console.error(`❌ Failed to emit enriched event for ${bookingCode}:`, emitError);
+    }
+
+    // Update enrichmentStatus to completed after processing
+    try {
+      await prisma.booking.update({
+        where: {
+          userId_bookingCode: {
+            userId: this.userId,
+            bookingCode: bookingCode
+          }
+        },
+        data: {
+          enrichmentStatus: 'completed',
+          enrichmentProgress: result.emailsProcessed,
+          enrichmentTotal: result.emailsFound
+        }
+      });
+      console.log(`✅ Marked ${bookingCode} as enrichment completed (${result.emailsProcessed}/${result.emailsFound} emails)`);
+    } catch (updateError: any) {
+      console.error(`❌ Failed to update enrichmentStatus for ${bookingCode}:`, updateError);
     }
 
     return result;

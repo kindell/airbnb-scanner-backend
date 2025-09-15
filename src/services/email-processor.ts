@@ -708,8 +708,13 @@ export class EmailProcessor {
       console.log(`   Converted "${originalDate}" to Date: ${filtered.checkOutDate} (${filtered.checkOutDate.toISOString()})`);
     }
 
-    // Set defaults for required fields
-    filtered.status = filtered.status || 'confirmed';
+    // Set defaults for required fields - calculate status based on dates
+    if (!filtered.status) {
+      const { determineStatusFromEmail } = require('../utils/booking-status');
+      const checkInDate = filtered.checkInDate ? new Date(filtered.checkInDate) : null;
+      const checkOutDate = filtered.checkOutDate ? new Date(filtered.checkOutDate) : null;
+      filtered.status = determineStatusFromEmail(filtered.emailType, checkInDate, checkOutDate);
+    }
     filtered.enrichmentStatus = 'scanning';
     filtered.enrichmentProgress = 0;
     filtered.enrichmentTotal = 0;

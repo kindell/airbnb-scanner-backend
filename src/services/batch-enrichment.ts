@@ -66,6 +66,10 @@ export class BatchEnrichmentService {
 
     console.log(`🚀 [BATCH ENRICHMENT] Starting batch enrichment for ${bookingCodes.length} booking codes`);
 
+    // Mark all bookings as 'enriching' at the start
+    await this.updateAllBookingsStatus(bookingCodes, 'enriching');
+    console.log(`🔄 [BATCH ENRICHMENT] Marked ${bookingCodes.length} bookings as enriching`);
+
     const result: BatchEnrichmentResult = {
       totalBookingsProcessed: bookingCodes.length,
       totalEmailsFound: 0,
@@ -182,9 +186,17 @@ export class BatchEnrichmentService {
       const errorMsg = `Batch enrichment failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
       console.error(`❌ [BATCH ENRICHMENT] ${errorMsg}`);
       result.errors.push(errorMsg);
+
+      // Mark bookings as failed on critical error
+      await this.updateAllBookingsStatus(bookingCodes, 'completed'); // Keep as completed to avoid loops
+      console.log(`⚠️ [BATCH ENRICHMENT] Marked ${bookingCodes.length} bookings as completed due to error`);
     }
 
     result.executionTime = Date.now() - startTime;
+
+    // Mark all bookings as 'completed' at the end
+    await this.updateAllBookingsStatus(bookingCodes, 'completed');
+    console.log(`✅ [BATCH ENRICHMENT] Marked ${bookingCodes.length} bookings as completed`);
 
     console.log(`🏁 [BATCH ENRICHMENT] Completed in ${result.executionTime}ms`);
     console.log(`📊 [BATCH ENRICHMENT] Results: ${result.totalEmailsFound} emails found, ${result.totalEmailsProcessed} processed, ${result.errors.length} errors`);
@@ -339,7 +351,7 @@ export class BatchEnrichmentService {
       console.log(`   📋 Processing ${parsedData.emailType} for ${parsedData.bookingCode} (email: ${emailId})`);
 
       // Uppdatera bokningen med enriched data
-      await this.upsertEnrichedBooking(parsedData, emailId, email.threadId);
+      await this.upsertEnrichedBooking(parsedData, emailId, email.threadId, headers);
 
       return true;
 
@@ -352,7 +364,7 @@ export class BatchEnrichmentService {
   /**
    * Skapa eller uppdatera bokning med enriched data
    */
-  private async upsertEnrichedBooking(parsedData: any, emailId: string, threadId: string): Promise<void> {
+  private async upsertEnrichedBooking(parsedData: any, emailId: string, threadId: string, headers: any): Promise<void> {
     try {
       const existingBooking = await prisma.booking.findFirst({
         where: {
@@ -427,8 +439,8 @@ export class BatchEnrichmentService {
       // Skapa email link för denna email
       try {
         const emailType = this.mapEmailTypeForEmailLink(parsedData.emailType);
-        const subject = parsedData.subject || `${parsedData.emailType} email`;
-        const emailDate = parsedData.emailDate ? new Date(parsedData.emailDate) : new Date();
+        const subject = headers.subject || `${parsedData.emailType} email`;
+        const emailDate = headers.date ? new Date(headers.date) : new Date();
 
         await EmailLinkManager.addEmailLinkByBookingCode(
           this.userId,
@@ -574,6 +586,35 @@ export class BatchEnrichmentService {
       default:
         console.warn(`Unknown email type for email link: ${emailType}, defaulting to 'confirmation'`);
         return 'confirmation';
+    }
+  }
+
+  /**
+   * Uppdatera enrichmentStatus för alla bokningar
+   */
+  private async updateAllBookingsStatus(bookingCodes: string[], status: 'enriching' | 'completed'): Promise<void> {
+    try {
+      const updatePromises = bookingCodes.map(async (bookingCode) => {
+        try {
+          await prisma.booking.update({
+            where: {
+              userId_bookingCode: {
+                userId: this.userId,
+                bookingCode: bookingCode
+              }
+            },
+            data: {
+              enrichmentStatus: status
+            }
+          });
+        } catch (updateError: any) {
+          console.error(`❌ [BATCH ENRICHMENT] Failed to mark ${bookingCode} as ${status}:`, updateError.message);
+        }
+      });
+
+      await Promise.all(updatePromises);
+    } catch (error) {
+      console.error(`❌ [BATCH ENRICHMENT] Failed to update booking statuses to ${status}:`, error instanceof Error ? error.message : 'Unknown error');
     }
   }
 

@@ -57,7 +57,7 @@ export class MLEmailParser {
    */
   private static async getWorkerPool(): Promise<MLWorkerPool> {
     if (!MLEmailParser.workerPool) {
-      MLEmailParser.workerPool = new MLWorkerPool(3); // 3 workers with sequential initialization
+      MLEmailParser.workerPool = new MLWorkerPool(3); // 3 workers with circuit breaker protection
       await MLEmailParser.workerPool.initialize();
     }
     return MLEmailParser.workerPool;
@@ -287,16 +287,18 @@ export class MLEmailParser {
 
       let status = 'processed';
       
-      // Determine status based on email type
-      if (result.emailType === 'booking_confirmation') {
-        status = 'confirmed';
-      } else if (result.emailType === 'booking_reminder') {
-        status = 'confirmed'; // Reminders are for confirmed bookings
-      } else if (result.emailType === 'cancellation') {
-        // Check if host still gets paid despite cancellation
+      // Determine status based on email type and dates
+      const { determineStatusFromEmail } = require('../utils/booking-status');
+
+      // Convert parsed dates to Date objects for status calculation
+      const checkInDate = result.checkInDate ? new Date(result.checkInDate) : null;
+      const checkOutDate = result.checkOutDate ? new Date(result.checkOutDate) : null;
+
+      status = determineStatusFromEmail(result.emailType, checkInDate, checkOutDate);
+
+      // Log cancellation details
+      if (result.emailType === 'cancellation') {
         const hasEarnings = result.hostEarningsEur && result.hostEarningsEur > 0;
-        status = hasEarnings ? 'cancelled_with_payout' : 'cancelled';
-        
         if (hasEarnings) {
           console.log(`🚫💰 ML parsed CANCELLED WITH PAYOUT booking: ${result.bookingCode} - €${result.hostEarningsEur}`);
         } else {
